@@ -1,0 +1,19 @@
+services:
+  companion-bot:
+    build: .
+    container_name: telegram-companion-ai
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./companion.db:/app/companion.db
+      - ./assets:/app/assets
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"

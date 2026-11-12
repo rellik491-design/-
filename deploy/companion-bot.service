@@ -1,0 +1,37 @@
+[Unit]
+Description=Telegram Companion AI Bot (24/7 Service)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# Путь к папке проекта на сервере (измените при необходимости)
+WorkingDirectory=/opt/telegram-companion-ai
+
+# Запуск через uv или виртуальное окружение
+ExecStart=/root/.cargo/bin/uv run python main.py
+
+# Автоматический перезапуск при любых падениях или завершениях
+Restart=always
+RestartSec=5s
+
+# Переменные окружения
+Environment=PYTHONPATH=src
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/telegram-companion-ai/.env
+
+# Корректная остановка без потери данных в SQLite
+KillMode=mixed
+TimeoutStopSec=15s
+
+# Лимиты ресурсов
+LimitNOFILE=65536
+
+# Логирование через systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=companion-bot
+
+[Install]
+WantedBy=multi-user.target

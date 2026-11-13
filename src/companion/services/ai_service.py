@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import random
 import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
@@ -58,6 +59,13 @@ class AIService:
 
         time_context = TimezoneService.format_time_context(
             tz_name, contact.detected_timezone, current_time
+        )
+
+        from companion.services.time_engine import TimeEngine
+        time_awareness_block = TimeEngine.format_time_awareness_prompt(
+            tz_name=tz_name,
+            ref_utc_dt=current_time,
+            incoming_message=incoming_message,
         )
 
         contact_name = contact.first_name or contact.username or "собеседник"
@@ -140,6 +148,8 @@ class AIService:
 
 {geo_context}
 Временной контекст: {time_context}
+
+{time_awareness_block}
 
 {no_brackets_directive}
 
@@ -238,6 +248,16 @@ class AIService:
    - Пиши так, словно ты обычная живая девушка, которая быстро записывает голосовое или наговаривает мысль прямо сейчас на ходу или дома.
    - Используй живые разговорные связки («слушай...», «ну...», «в общем...», «кстати...», «да вот...»), мягкие паузы и естественные интонации.
    - Если мужчина прислал голосовое — отвечай максимально тепло и органично, ведь с вероятностью 35% твой ответ запишется ему реальным голосовым сообщением!
+
+15. ПАКЕТЫ СООБЩЕНИЙ, ГОЛОСОВЫЕ В ПАЧКЕ, НАТИВНЫЙ REPLY, ИМПУЛЬСИВНЫЕ СООБЩЕНИЯ, СМЕХ, СКОБКИ И СТИКЕРЫ:
+   - Если парень прислал несколько сообщений подряд (`[msg_id=101] ...`, `[msg_id=102] ...`), воспринимай всю пачку целиком как ЕДИНУЮ связную реплику, не отвечай механически на каждую строчку по отдельности.
+   - Если в пачке есть расшифровка голосового `[msg_id=...] [VOICE MESSAGE, ...s] Transcription: "..."` — отвечай по смыслу расшифрованного текста и контексту сообщений вокруг него. Если указано `[TRANSCRIPTION_FAILED]` — НИ В КОЕМ СЛУЧАЕ не придумывай, что было в голосовом, а естественно попроси написать текстом («не смогла разобрать голосовое 😭 напиши текстом плиз»).
+   - Если в пачке поднято 2–3 разные темы или задано несколько вопросов, раздели ответ через `||` на 2–3 коротких естественных сообщения по темам (например: `[REPLY:101] выставка в гараже кстати крутая, я бы сходила||и да, недавно поела 😌`).
+   - Тег `[REPLY:<id>]` ставь ТОЛЬКО перед тем пузырем, который отвечает на конкретный более ранний вопрос или тему из пачки (не ставь Reply на каждое сообщение, обычное продолжение пиши без тега!).
+   - Если собеседник торопит или пишет импульсивной серией капсом/вопросами («АЛЛО», «ТЫ ГДЕ», «????», «ПОЧЕМУ НЕ ОТВЕЧАЕШЬ», «ДАВАЙ») — не пиши длинных оправданий, ответь живой быстрой серией коротких реплик через `||` («я тут||вижу||секунду» или «да вижу 😭||не игнорю тебя||сейчас отвечу»).
+   - Смех пиши разнообразно и минимум из 5–6 букв по контексту: «ахаха», «ахахах», «ахахаха», «хахах», «АХАХАХ», «АХАХАХА» (не штампуй одинаковое короткое «ахах»).
+   - Скобочку `)` ставь РЕДКО — только при явном флирте, кокетстве или поддразнивании («может быть)», «не скажу)`). Обычные фразы («да, я посмотрела», «договорились») пиши БЕЗ скобок!
+   - Изредка при яркой эмоции можешь добавить в конец тег стикера: `[STICKER:laugh]`, `[STICKER:surprise]`, `[STICKER:facepalm]`, `[STICKER:cute]`, `[STICKER:teasing]`, `[STICKER:celebration]`.
 """
         return prompt
 
@@ -245,16 +265,13 @@ class AIService:
 
     @classmethod
     def get_chat_history(cls, contact_id: int) -> List[Dict[str, str]]:
-        return cls._contact_chat_history.get(contact_id, [])
+        from companion.ai.memory_manager import MemoryManager
+        return MemoryManager.get_cached_short_term(contact_id)
 
     @classmethod
     def add_chat_turn(cls, contact_id: int, user_text: str, model_reply: str):
-        if contact_id not in cls._contact_chat_history:
-            cls._contact_chat_history[contact_id] = []
-        cls._contact_chat_history[contact_id].append({"role": "user", "text": user_text})
-        cls._contact_chat_history[contact_id].append({"role": "model", "text": model_reply})
-        if len(cls._contact_chat_history[contact_id]) > 40:
-            cls._contact_chat_history[contact_id] = cls._contact_chat_history[contact_id][-40:]
+        from companion.ai.memory_manager import MemoryManager
+        MemoryManager.add_short_term_turn(contact_id, user_text, model_reply)
 
     @classmethod
     def sanitize_anti_ai_delusions(cls, reply_text: str, incoming_message: str = "", contact: Optional[Contact] = None) -> str:
@@ -290,6 +307,70 @@ class AIService:
             reply_text = "привет) ты как сам?"
         return reply_text
 
+    _last_fallbacks: Dict[int, str] = {}
+
+    @classmethod
+    def generate_contextual_fallback(
+        cls,
+        contact: Optional[Contact],
+        persona: Optional[Persona],
+        incoming_text: str,
+    ) -> str:
+        """
+        Intelligent, anti-repetition contextual fallback when Gemini API is temporarily unavailable.
+        Analyzes the interlocutor's intent (free time question, current activity, meetup, greeting)
+        and replies with human, varied responses matching the persona.
+        """
+        contact_id = contact.id if contact else 0
+        last_used = cls._last_fallbacks.get(contact_id, "")
+        low = (incoming_text or "").lower().strip()
+
+        # 1. User asks when she is free ("когда свободна?", "когда позже?", "во сколько?")
+        if any(k in low for k in ("когда свободна", "когда ты свободна", "когда позже", "во сколько", "когда сможешь", "во сколько свободна", "когда будешь")):
+            options = [
+                "ближе к 8-9 вечера освобожусь, сейчас по учебе дела надо доделать)",
+                "вечерком часиков в 8 как раз разгребусь и смогу нормально поболтать)",
+                "да вот через пару часиков закончу дела и напишу тебе нормальненько)",
+                "сегодня часиков после 7-8 буду свободна, как раз освобожусь)",
+            ]
+        # 2. User asks what she is doing ("что делаешь?", "чем занята?")
+        elif any(k in low for k in ("что делаешь", "чем занята", "че делаешь", "что делала", "чем занимаешься")):
+            options = [
+                "да вот дома с учебой сижу ковыряюсь, макет для фриланса доделываю)",
+                "только зашла домой, отдыхаю с чаем, ты как сам?)",
+                "сериал фоном включила, чай пью, ты чем занимаешься?)",
+                "сижу над проектом по дизайну, немного отвлеклась, как твой день проходит?)",
+            ]
+        # 3. User asks how she is ("как дела?", "как ты?")
+        elif any(k in low for k in ("как дела", "как ты", "как жизнь", "как успехи")):
+            options = [
+                "приветик) да потихоньку, день насыщенный выдался, ты сам как?",
+                "привет) все хорошо, вот только освободилась немного, ты как проводишь вечер?",
+                "да нормально в целом, в делах вся была) как твои дела?",
+            ]
+        # 4. User asks about meeting / hangout
+        elif any(k in low for k in ("встрет", "увид", "погуля", "кофе", "погнали", "куда пойд")):
+            options = [
+                "хм, слушай, на выходных в целом можно что-то придумать) только давай не в душное кафе)",
+                "давай попозже обсудим, я бы с удовольствием выбралась куда-нибудь в интересное место)",
+                "звучит заманчиво) ближе к выходным посмотрим по графику, ладно?",
+            ]
+        # 5. Default natural pool
+        else:
+            options = [
+                "слушай, я сейчас немного в делах, через часик напишу ладно?)",
+                "да вот отвлеклась на учебу немного) ты как сам?",
+                "секунду, доделаю пару правок по дизайну и вернусь к тебе)",
+                "немного замоталась сегодня) что у тебя нового интересного?",
+                "да, понимаю тебя) как раз думала об этом",
+            ]
+
+        # Filter out the phrase that was just sent last time to guarantee NO repetition
+        fresh_options = [opt for opt in options if opt != last_used]
+        chosen = random.choice(fresh_options if fresh_options else options)
+        cls._last_fallbacks[contact_id] = chosen
+        return chosen
+
     @classmethod
     async def generate_reply(
         cls,
@@ -299,131 +380,69 @@ class AIService:
         new_incoming_message: str,
         is_voice: bool = False,
         voice_duration: int = 0,
+        session: Optional[Any] = None,
+        incoming_batch: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
-        Generates contextual reply exclusively using Google Gemini API,
-        eradicating all traces of robotic tone and hardcoded templates.
+        Generates contextual reply using the 7-Level ContextManager, MemoryManager,
+        and async GeminiClient. Never dumps full conversation history.
         """
-        raw_style = getattr(persona, "current_style", "adaptive_all")
-        try:
-            style_enum = StyleType(raw_style)
-        except Exception:
-            style_enum = StyleType.ADAPTIVE_ALL
+        from companion.ai.context_manager import ContextManager
+        from companion.ai.gemini_client import GeminiClient
 
         contact_id = contact.id if contact else None
-
-        # Load history from memory if empty
         effective_history = chat_history or (cls.get_chat_history(contact_id) if contact_id else [])
 
-        api_key = settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            import traceback
-            print("\n" + "=" * 60)
-            print("❌ ОШИБКА: GEMINI_API_KEY не задан в .env или config!")
-            print("=" * 60 + "\n")
-            logger.error("GEMINI_API_KEY is not configured! Please provide a valid key in .env.")
-            raw_text = "слушай, я сейчас немного занята, напишу чуть попозже ладно?)"
+        if "[VOICE MESSAGE" in (new_incoming_message or ""):
+            voice_annotated_msg = new_incoming_message
         else:
-            try:
-                from google import genai
-                from google.genai import types
+            voice_annotated_msg = (
+                f"[Голосовое сообщение {voice_duration} сек]: {new_incoming_message}"
+                if is_voice and voice_duration > 0
+                else (f"[Голосовое сообщение]: {new_incoming_message}" if is_voice else new_incoming_message)
+            )
 
-                safety_settings = [
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                    types.SafetySetting(
-                        category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                        threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                    ),
-                ]
+        # Real Web Research deterministic policy
+        web_search_context = None
+        try:
+            from companion.services.web_search_service import WebResearchService
+            search_decision = WebResearchService.should_search_web(new_incoming_message)
+            if search_decision["should_search"]:
+                search_query = search_decision["query"] or new_incoming_message
+                logger.info("[WEB_RESEARCH] Triggered web search for: '%s' (reason: %s)", search_query, search_decision["reason"])
+                search_res = await WebResearchService.search(search_query)
+                web_search_context = WebResearchService.format_web_context_for_prompt(search_res)
+        except Exception as ws_err:
+            logger.warning("[WEB_RESEARCH] Search policy/execution error: %s", ws_err)
 
-                client = genai.Client(api_key=api_key)
-                system_instruction = cls.build_system_prompt(persona, contact, new_incoming_message)
+        # Build 7-level context (with intelligent historical retrieval when needed)
+        context_pkg = await ContextManager.build_seven_level_context(
+            persona=persona,
+            contact=contact,
+            new_incoming_message=voice_annotated_msg,
+            session=session,
+            explicit_recent_history=effective_history,
+            web_search_context=web_search_context,
+        )
+        prompt_content = context_pkg["prompt_contents"]
+        system_instruction = cls.build_system_prompt(persona, contact, new_incoming_message)
 
-                # Format conversation history with last 20 messages for rich multi-turn context
-                prompt_content = "История диалога в Telegram:\n"
-                for msg in effective_history[-20:]:
-                    role = "Собеседник" if msg.get("role") == "user" else persona.name
-                    prompt_content += f"{role}: {msg.get('text')}\n"
-
-                user_label = (
-                    f"Собеседник (прислал голосовое сообщение на {voice_duration} сек)"
-                    if is_voice and voice_duration > 0
-                    else ("Собеседник (прислал голосовое сообщение)" if is_voice else "Собеседник")
-                )
-                prompt_content += f"{user_label}: {new_incoming_message}\n{persona.name}:"
-
-                config = types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    safety_settings=safety_settings,
-                )
-
-                models_to_try = [
-                    settings.GEMINI_MODEL,
-                    "gemini-flash-lite-latest",
-                    "gemini-3.5-flash-lite",
-                    "gemini-2.0-flash",
-                    "gemini-1.5-flash",
-                    "gemini-3.8-flash",
-                ]
-                unique_models = []
-                for m in models_to_try:
-                    if m and m not in unique_models:
-                        unique_models.append(m)
-
-                raw_text = ""
-                last_error = None
-                for model_name in unique_models:
-                    try:
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=prompt_content,
-                            config=config,
-                        )
-                        if response and response.text:
-                            raw_text = response.text.strip()
-                            logger.info("Successfully generated reply using Gemini model: %s", model_name)
-                            break
-                    except Exception as err:
-                        last_error = err
-                        logger.warning("Gemini model %s failed: %s", model_name, err)
-
-                if not raw_text:
-                    import traceback
-                    print("\n" + "=" * 60)
-                    print("❌ КРИТИЧЕСКАЯ ОШИБКА ВЫЗОВА GOOGLE GEMINI API!")
-                    print(f"Используемый API_KEY: {api_key[:10]}...{api_key[-5:] if len(api_key) > 15 else ''}")
-                    print(f"Опробованные модели: {unique_models}")
-                    print("Подробный стек ошибки:")
-                    traceback.print_exc()
-                    if last_error:
-                        print(f"Последняя ошибка: {last_error}")
-                    print("=" * 60 + "\n")
-                    logger.error("All Gemini candidate models failed. Last error: %s", last_error, exc_info=True)
-                    raw_text = "слушай, я сейчас немного занята, напишу чуть попозже ладно?)"
-
-            except Exception as e:
-                import traceback
-                print("\n" + "=" * 60)
-                print("❌ ИСКЛЮЧЕНИЕ ПРИ ПОДГОТОВКЕ ВЫЗОВА GEMINI API:")
-                traceback.print_exc()
-                print("=" * 60 + "\n")
-                logger.error("Exception in Gemini generate_reply: %s", e, exc_info=True)
-                raw_text = "слушай, я сейчас немного занята, напишу чуть попозже ладно?)"
+        api_key = GeminiClient.get_api_key()
+        if not api_key:
+            logger.warning("GEMINI_API_KEY is not configured; using contextual fallback reply.")
+            raw_text = cls.generate_contextual_fallback(contact, persona, new_incoming_message)
+        else:
+            generated = await GeminiClient.generate_content(
+                contents=prompt_content,
+                system_instruction=system_instruction,
+                temperature=0.75,
+                max_output_tokens=320,
+                api_key=api_key,
+            )
+            raw_text = generated or cls.generate_contextual_fallback(contact, persona, new_incoming_message)
 
         # Parse technical event tags & status
         detected_event = None
-        is_blocked = False
 
         if "[EVENT: DATE_PROPOSED]" in raw_text:
             detected_event = "DATE_PROPOSED"
@@ -453,11 +472,16 @@ class AIService:
                 if contact:
                     contact.no_brackets = True
 
-        # Sanity Guard: Prevent unprompted AI/Bot delusions (e.g. "я не бот вообще-то", "я не робот", "я реальная")
-        # and geographic hallucinations (e.g. "давно в нью-йорке живешь?")
+        # Sanity Guard: Prevent unprompted AI/Bot delusions & geographic hallucinations
         raw_text = cls.sanitize_anti_ai_delusions(raw_text, new_incoming_message, contact=contact)
 
-        final_reply = DialogueStyleEngine.humanize_text_formatting(raw_text, no_brackets=no_brackets)
+        final_reply = DialogueStyleEngine.humanize_text_formatting(
+            raw_text,
+            no_brackets=no_brackets,
+            incoming_text=new_incoming_message,
+            style=getattr(persona, "current_style", "adaptive_all") if persona else "adaptive_all",
+            contact_id=contact_id,
+        )
         if contact_id:
             user_turn_text = f"🎙 [ГС {voice_duration}с]: {new_incoming_message}" if is_voice else new_incoming_message
             cls.add_chat_turn(contact_id, user_turn_text, final_reply)
@@ -467,13 +491,13 @@ class AIService:
     async def parse_legend_wizard(cls, user_text: str) -> Dict[str, Any]:
         """
         Parses free-form description of a girl's persona into structured fields
-        using Gemini API (or structured fallback).
+        using async GeminiClient (or morphological fallback).
         """
-        api_key = settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")
+        from companion.ai.gemini_client import GeminiClient
+
+        api_key = GeminiClient.get_api_key()
         if api_key:
             try:
-                from google import genai
-                client = genai.Client(api_key=api_key)
                 prompt = (
                     f"Извлеки данные анкеты девушки из следующего текста и верни СТРОГО валидный JSON-объект без markdown-разметки:\n\n"
                     f"\"{user_text}\"\n\n"
@@ -492,25 +516,14 @@ class AIService:
                     f'  "legend": "Краткая легенда персонажа"\n'
                     f"}}"
                 )
-                unique_models = []
-                for m in [settings.GEMINI_MODEL, "gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-2.0-flash", "gemini-3.8-flash"]:
-                    if m and m not in unique_models:
-                        unique_models.append(m)
-
-                resp = None
-                for model_name in unique_models:
-                    try:
-                        resp = client.models.generate_content(
-                            model=model_name,
-                            contents=prompt,
-                        )
-                        if resp and resp.text:
-                            break
-                    except Exception as err:
-                        logger.warning("parse_legend_wizard model %s failed: %s", model_name, err)
-
-                if resp and resp.text:
-                    text = resp.text.strip()
+                resp_text = await GeminiClient.generate_content(
+                    contents=prompt,
+                    temperature=0.2,
+                    max_output_tokens=500,
+                    api_key=api_key,
+                )
+                if resp_text:
+                    text = resp_text.strip()
                     if "```json" in text:
                         text = text.split("```json")[1].split("```")[0].strip()
                     elif "```" in text:
@@ -530,14 +543,9 @@ class AIService:
                         "legend": data.get("legend") or "Общительная, милая и немного саркастичная девушка.",
                     }
             except Exception as e:
-                import traceback
-                print("\n" + "=" * 60)
-                print("❌ ОШИБКА В parse_legend_wizard:")
-                traceback.print_exc()
-                print("=" * 60 + "\n")
                 logger.error("Error in parse_legend_wizard Gemini call: %s", e)
 
-        # Fallback heuristic parser
+        # Fallback heuristic parser with Russian declension support via TimezoneService
         cleaned = user_text.strip()
         name = "Алина"
         age = 22
@@ -555,10 +563,27 @@ class AIService:
         if name_match:
             name = name_match.group(1).capitalize()
 
-        for c in ["Москва", "Санкт-Петербург", "Питер", "Казань", "Екатеринбург", "Новосибирск", "Сочи", "Краснодар"]:
-            if c.lower() in cleaned.lower():
-                city = "Москва" if c.lower() == "москва" else ("Санкт-Петербург" if c.lower() in ["санкт-петербург", "питер"] else c)
-                break
+        detected_city, _ = TimezoneService.detect_city_and_timezone(cleaned)
+        if detected_city:
+            city = "Санкт-Петербург" if detected_city == "Питер" else detected_city
+        else:
+            city_stems = {
+                "москв": "Москва",
+                "санкт-петербург": "Санкт-Петербург",
+                "петербург": "Санкт-Петербург",
+                "питер": "Санкт-Петербург",
+                "казан": "Казань",
+                "екатеринбург": "Екатеринбург",
+                "новосибирск": "Новосибирск",
+                "сочи": "Сочи",
+                "краснодар": "Краснодар",
+                "самар": "Самара",
+            }
+            lower_cleaned = cleaned.lower()
+            for stem, canonical in city_stems.items():
+                if stem in lower_cleaned:
+                    city = canonical
+                    break
 
         return {
             "name": name,

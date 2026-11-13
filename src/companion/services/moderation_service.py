@@ -77,10 +77,7 @@ class ModerationService:
         api_key = settings.GEMINI_API_KEY
         if api_key:
             try:
-                from google import genai
-                from google.genai import types
-
-                client = genai.Client(api_key=api_key)
+                from companion.ai.gemini_client import GeminiClient
 
                 recent_context = ""
                 if chat_history:
@@ -104,27 +101,19 @@ class ModerationService:
                     "}"
                 )
 
-                models = ["gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-2.5-flash"]
-                for model in models:
-                    try:
-                        resp = await client.aio.models.generate_content(
-                            model=model,
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.1,
-                                max_output_tokens=150,
-                            ),
-                        )
-                        raw = (resp.text or "").strip()
-                        raw = re.sub(r"^```json\s*", "", raw)
-                        raw = re.sub(r"\s*```$", "", raw).strip()
-                        data = json.loads(raw)
-                        is_insult = bool(data.get("is_insult", False))
-                        reason = str(data.get("reason", "Грубое высказывание в диалоге"))
-                        return is_insult, reason
-                    except Exception as mod_err:
-                        logger.debug("Model %s moderation check error: %s", model, mod_err)
-                        continue
+                resp_text = await GeminiClient.generate_content(
+                    contents=prompt,
+                    temperature=0.1,
+                    max_output_tokens=150,
+                )
+                if resp_text:
+                    raw = resp_text.strip()
+                    raw = re.sub(r"^```json\s*", "", raw)
+                    raw = re.sub(r"\s*```$", "", raw).strip()
+                    data = json.loads(raw)
+                    is_insult = bool(data.get("is_insult", False))
+                    reason = str(data.get("reason", "Грубое высказывание в диалоге"))
+                    return is_insult, reason
             except Exception as e:
                 logger.warning("Gemini moderation API error: %s (%s). Falling back to heuristic.", type(e).__name__, e)
 

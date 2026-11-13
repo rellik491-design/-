@@ -352,39 +352,49 @@ class VoiceService:
         clean = re.sub(r"\.{4,}", "...", clean)
         return clean
 
+    # Studio-grade Mastering Equalizer specified by user:
+    # Low Cut 62Hz 24dB/oct (cascaded 2-pole highpass), Bell 194Hz -2.33dB, Bell 437Hz -1.12dB,
+    # Bell 800Hz -1.45dB, Bell 2841Hz +1dB, High Shelf 6678Hz +0.60dB
+    MASTERING_EQ_FILTER = (
+        "highpass=f=62:poles=2,highpass=f=62:poles=2,"
+        "equalizer=f=194:width_type=q:width=1.0:gain=-2.33,"
+        "equalizer=f=437:width_type=q:width=1.0:gain=-1.12,"
+        "equalizer=f=800:width_type=q:width=1.0:gain=-1.45,"
+        "equalizer=f=2841:width_type=q:width=1.0:gain=1.0,"
+        "highshelf=f=6678:gain=0.60"
+    )
+
     @classmethod
-    def apply_phone_mic_filter(cls, raw_mp3: bytes) -> bytes:
+    def apply_mastering_equalizer(cls, raw_audio: bytes) -> bytes:
         """
-        Applies authentic iPhone microphone acoustics in Telegram without barrel or muffled effect:
-        - highpass=f=75: soft cut of low rumble (< 75 Hz)
-        - lowpass=f=15500: wide acoustic band up to 15.5 kHz
-        - equalizer=f=3500: presence boost at 3.5 kHz
-        - acompressor: gentle dynamic leveling of speech and breathing
-        - -ac 1: strict mono, standard phone mic
-        - -ar 48000: Telegram Opus sample rate
-        - -c:a libopus -b:a 48k -vbr on -application voip: real iPhone voice note bitrate & voice optimization
+        Fast studio-grade post-processing equalizer chain for all outgoing voice messages:
+        - Low Cut 62HZ 24dB/oct (two cascaded 2-pole highpass filters at 62 Hz)
+        - Bell 194hz -2.33dB
+        - Bell 437hz -1.12dB
+        - Bell 800hz -1.45dB
+        - Bell 2841hz +1dB
+        - High Shelf 6678hz +0.60db
+        Converts any audio stream to Telegram-native 48kHz mono libopus Ogg voice note.
         """
+        if not raw_audio or len(raw_audio) < 10:
+            return raw_audio
+
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f_in:
-            f_in.write(raw_mp3)
+        with tempfile.NamedTemporaryFile(suffix=".audio", delete=False) as f_in:
+            f_in.write(raw_audio)
             in_path = f_in.name
 
-        out_path = in_path.replace(".mp3", ".ogg")
+        out_path = in_path + ".ogg"
         cmd = [
             ffmpeg_exe,
             "-y",
             "-i", in_path,
-            "-af", (
-                "highpass=f=80,"
-                "lowpass=f=16000,"
-                "equalizer=f=3200:width_type=q:width=1.2:g=2.5,"
-                "acompressor=threshold=-18dB:ratio=2.5:attack=15:release=120"
-            ),
-            "-ac", "1",
-            "-ar", "48000",
+            "-af", cls.MASTERING_EQ_FILTER,
             "-c:a", "libopus",
             "-b:a", "48k",
             "-vbr", "on",
+            "-ar", "48000",
+            "-ac", "1",
             "-application", "voip",
             out_path,
         ]
@@ -393,12 +403,28 @@ class VoiceService:
             if res.returncode == 0 and os.path.exists(out_path):
                 with open(out_path, "rb") as f_out:
                     return f_out.read()
+        except Exception as e:
+            logger.error("Error in apply_mastering_equalizer: %s", e)
         finally:
             if os.path.exists(in_path):
-                os.remove(in_path)
+                try:
+                    os.remove(in_path)
+                except OSError:
+                    pass
             if os.path.exists(out_path):
-                os.remove(out_path)
-        return raw_mp3
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+
+        return raw_audio
+
+    @classmethod
+    def apply_phone_mic_filter(cls, raw_mp3: bytes) -> bytes:
+        """
+        Applies authentic smartphone acoustic mastering using the custom equalizer chain.
+        """
+        return cls.apply_mastering_equalizer(raw_mp3)
 
     @classmethod
     def humanize_text_for_speech(cls, text: str) -> str:
@@ -709,6 +735,10 @@ class VoiceService:
                 if text:
                     return await cls.send_text_fallback(bot_token, chat_id, text, business_connection_id, reply_markup)
                 return False
+
+            # Fast studio mastering equalizer: Low Cut 62HZ 24dB/oct, bell 194hz -2.33dB,
+            # bell 437hz -1.12dB, bell 800hz -1.45dB, bell 2841hz +1dB, High Shelf 6678hz +0.60db
+            audio_bytes = cls.apply_mastering_equalizer(audio_bytes)
 
             url = f"https://api.telegram.org/bot{bot_token}/sendVoice"
             files = {"voice": ("voice.ogg", audio_bytes, "audio/ogg")}

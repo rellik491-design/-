@@ -131,7 +131,6 @@ class InviteToken(Base):
 
     user: Mapped["User"] = relationship()
 
-
 class Persona(Base):
     __tablename__ = "personas"
 
@@ -215,6 +214,11 @@ class Contact(Base):
 
     # Dynamic conversation style preferences per contact
     no_brackets: Mapped[bool] = mapped_column(Boolean, default=False)
+    preferred_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    communication_style: Mapped[Optional[str]] = mapped_column(String(32), default="casual", nullable=True)
+    preferred_response_length: Mapped[Optional[str]] = mapped_column(String(32), default="medium", nullable=True)
+    emoji_frequency: Mapped[Optional[str]] = mapped_column(String(32), default="medium", nullable=True)
+    likes_multi_message_responses: Mapped[Optional[bool]] = mapped_column(Boolean, default=True, nullable=True)
 
     # Contextual re-engagement & sleep resumption
     scheduled_reengage_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
@@ -243,6 +247,12 @@ class Contact(Base):
     messages: Mapped[List["ContactMessage"]] = relationship(
         back_populates="contact", cascade="all, delete-orphan", order_by="ContactMessage.id"
     )
+    memories: Mapped[List["ContactMemory"]] = relationship(
+        back_populates="contact", cascade="all, delete-orphan"
+    )
+    summary_record: Mapped[Optional["ConversationSummary"]] = relationship(
+        back_populates="contact", cascade="all, delete-orphan", uselist=False
+    )
 
 
 class ContactMessage(Base):
@@ -250,19 +260,89 @@ class ContactMessage(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    telegram_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    reply_to_msg_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     sender_role: Mapped[str] = mapped_column(String(16))  # "user" (мужчина) or "bot" / "model" (девушка)
+    media_type: Mapped[str] = mapped_column(String(24), default="text")  # text, voice, video_note, photo, sticker, animation
     text: Mapped[str] = mapped_column(Text)
     is_voice: Mapped[bool] = mapped_column(Boolean, default=False)
     voice_file_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     voice_duration: Mapped[int] = mapped_column(Integer, default=0)
+    processing_status: Mapped[str] = mapped_column(
+        String(24), default="PROCESSED", index=True
+    )  # NEW, BATCHED, PROCESSING, PROCESSED, FAILED
+    batch_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     is_violation: Mapped[bool] = mapped_column(Boolean, default=False)
     violation_analysis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_edited: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
 
     contact: Mapped["Contact"] = relationship(back_populates="messages")
 
+
+class ContactMemory(Base):
+    """
+    Structured long-term memory per contact.
+    Stores only genuine persistent facts, preferences, habits, agreements, and goals (no memory spam).
+    """
+    __tablename__ = "contact_memories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)  # fact, preference, habit, agreement, goal, relationship
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    value: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[float] = mapped_column(Float, default=0.9)
+    source_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    contact: Mapped["Contact"] = relationship(back_populates="memories")
+
+
+class ConversationSummary(Base):
+    """
+    Rolling conversation-level memory per contact.
+    Tracks what has already been discussed, active topics, unresolved questions, and commitments.
+    """
+    __tablename__ = "conversation_summaries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), unique=True, index=True)
+    summary_text: Mapped[str] = mapped_column(Text, default="")
+    active_topics: Mapped[str] = mapped_column(String(512), default="")
+    unresolved_questions: Mapped[str] = mapped_column(Text, default="")
+    commitments: Mapped[str] = mapped_column(Text, default="")
+    messages_covered_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    contact: Mapped["Contact"] = relationship(back_populates="summary_record")
+
+
+class ProcessedUpdate(Base):
+    """
+    Idempotency & deduplication record for Telegram polling/webhook updates and Business Chat messages.
+    Prevents duplicate AI responses and race condition double-processing.
+    """
+    __tablename__ = "processed_updates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    update_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    update_type: Mapped[str] = mapped_column(String(32), default="business_message")
+    chat_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
 
 
 class MediaAsset(Base):
@@ -327,3 +407,42 @@ class PaymentInvoice(Base):
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     user: Mapped["User"] = relationship()
+
+
+class DaivinchikProfile(Base):
+    """
+    Stores parsed Daivinchik forwarded dating profiles and their generated bios.
+    Strictly separates factual source data from synthetic non-sensitive assumptions.
+    Maintains internal persona consistency across multiple regenerations.
+    """
+    __tablename__ = "daivinchik_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    profile_hash: Mapped[str] = mapped_column(String(64), index=True)
+    raw_text: Mapped[str] = mapped_column(Text)
+
+    # Extracted FACTS (explicitly from profile)
+    name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    age: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    facts_json: Mapped[str] = mapped_column(Text, default="{}")
+
+    # Generated NON-SENSITIVE persona assumptions (for consistent regenerations)
+    generated_details_json: Mapped[str] = mapped_column(Text, default="{}")
+
+    # Current generated bio & active style variant
+    current_bio: Mapped[str] = mapped_column(Text, default="")
+    style_variant: Mapped[str] = mapped_column(String(32), default="natural")
+    bio_history_json: Mapped[str] = mapped_column(Text, default="[]")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    user: Mapped["User"] = relationship()
+

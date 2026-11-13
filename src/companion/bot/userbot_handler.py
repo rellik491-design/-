@@ -1,14 +1,17 @@
+import os
 import re
+import time
+import uuid
 import random
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Dict, Any, List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from companion.config import settings
-from companion.models.entities import Contact, Persona
+from companion.models.entities import Contact, Persona, ContactMessage
 from companion.models.enums import ContactStatus
 from companion.services.subscription_service import SubscriptionService
 from companion.services.timezone_service import TimezoneService
@@ -17,6 +20,8 @@ from companion.services.handover_service import HandoverService
 from companion.services.media_service import MediaService
 from companion.services.ai_service import AIService
 from companion.services.voice_service import VoiceService
+from companion.services.stt_service import STTService
+from companion.bot.response_planner import ResponsePlanner
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,39 @@ class UserbotHandler:
         return contact
 
     @classmethod
+    async def get_pending_unread_messages(
+        cls,
+        session: AsyncSession,
+        contact_id: int,
+        max_lookback: int = 50,
+    ) -> List[ContactMessage]:
+        """
+        Inspects recent messages for `contact_id` and returns all currently unread/pending
+        user messages (`processing_status IN ('NEW', 'BATCHED', 'FAILED')` or trailing user
+        messages since the last bot reply), in exact chronological order (`id ASC`).
+        """
+        stmt = (
+            select(ContactMessage)
+            .where(
+                ContactMessage.contact_id == contact_id,
+                ContactMessage.is_deleted == False,
+            )
+            .order_by(ContactMessage.id.desc())
+            .limit(max_lookback)
+        )
+        rows_desc = (await session.execute(stmt)).scalars().all()
+        pending_reversed: List[ContactMessage] = []
+        for row in rows_desc:
+            if row.sender_role == "user":
+                pending_reversed.append(row)
+            elif getattr(row, "processing_status", "PROCESSED") in ("NEW", "BATCHED", "FAILED"):
+                pending_reversed.append(row)
+            else:
+                break
+        pending_reversed.reverse()
+        return pending_reversed
+
+    @classmethod
     async def process_incoming_message(
         cls,
         session: AsyncSession,
@@ -74,6 +112,9 @@ class UserbotHandler:
         is_voice: bool = False,
         voice_duration: int = 0,
         voice_file_id: Optional[str] = None,
+        telegram_message_id: Optional[int] = None,
+        incoming_batch: Optional[List[Dict[str, Any]]] = None,
+        bot_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Main pipeline for processing incoming messages:
@@ -157,21 +198,107 @@ class UserbotHandler:
                     "contact": contact,
                 }
 
-        # Update contact message stats
-        contact.total_messages_in += 1
+        t_collect_start = time.perf_counter()
+        eff_token = bot_token or settings.ADMIN_BOT_TOKEN
+        batch_id = f"batch_{contact.id}_{uuid.uuid4().hex[:10]}"
+
+        # Prepare list of incoming messages for this turn (each kept as its own individual message record)
+        batch_inputs: List[Dict[str, Any]] = []
+        if incoming_batch and len(incoming_batch) > 0:
+            for b_item in incoming_batch:
+                b_is_voice = bool(b_item.get("is_voice", False) or b_item.get("media_type") in ("voice", "video_note"))
+                b_mtype = b_item.get("media_type") or ("voice" if b_is_voice else "text")
+                batch_inputs.append(
+                    {
+                        "db_id": b_item.get("db_id"),
+                        "text": (b_item.get("text") or "").strip(),
+                        "message_id": b_item.get("message_id") if b_item.get("message_id") is not None else b_item.get("telegram_message_id"),
+                        "reply_to_msg_id": b_item.get("reply_to_msg_id"),
+                        "media_type": b_mtype,
+                        "is_voice": b_is_voice,
+                        "voice_duration": int(b_item.get("voice_duration") or 0),
+                        "voice_file_id": b_item.get("voice_file_id"),
+                        "voice_mime": b_item.get("voice_mime") or "audio/ogg",
+                        "transcription_failed": bool(b_item.get("transcription_failed", False)),
+                        "created_at": b_item.get("created_at") or current_time,
+                    }
+                )
+        else:
+            batch_inputs.append(
+                {
+                    "db_id": None,
+                    "text": text,
+                    "message_id": telegram_message_id,
+                    "reply_to_msg_id": None,
+                    "media_type": "voice" if is_voice else "text",
+                    "is_voice": is_voice,
+                    "voice_duration": voice_duration,
+                    "voice_file_id": voice_file_id,
+                    "voice_mime": "audio/ogg",
+                    "transcription_failed": False,
+                    "created_at": current_time,
+                }
+            )
+
+        # Transcribe any voice messages in the batch that haven't been transcribed yet
+        t_stt_start = time.perf_counter()
+        voice_transcription_s = 0.0
+        for b_item in batch_inputs:
+            if b_item["is_voice"]:
+                cur_txt = b_item["text"]
+                needs_stt = (
+                    not cur_txt
+                    or cur_txt in ("[PENDING_VOICE_TRANSCRIPTION]", "[Голосовое сообщение]", "[Видео-сообщение (кружок)]")
+                )
+                if needs_stt and b_item.get("voice_file_id") and eff_token:
+                    transcript, _ = await STTService.transcribe_telegram_voice(
+                        bot_token=eff_token,
+                        file_id=b_item["voice_file_id"],
+                        mime_type=b_item.get("voice_mime") or "audio/ogg",
+                    )
+                    if transcript and transcript.strip():
+                        b_item["text"] = transcript.strip()
+                        b_item["transcription_failed"] = False
+                    else:
+                        b_item["text"] = ResponsePlanner.VOICE_FAILED_MARKER
+                        b_item["transcription_failed"] = True
+                elif needs_stt and not b_item.get("voice_file_id"):
+                    b_item["text"] = ResponsePlanner.VOICE_FAILED_MARKER
+                    b_item["transcription_failed"] = True
+        voice_transcription_s = time.perf_counter() - t_stt_start
+
+        batch_inputs = [b for b in batch_inputs if b.get("text") or b.get("is_voice")]
+        if not batch_inputs:
+            return {"action": "ignored", "reason": "empty_batch", "contact": contact}
+
+        # Combined text of all newly arrived messages in this batch
+        combined_text = "\n".join(b["text"] for b in batch_inputs if b.get("text"))
+        any_voice = any(b["is_voice"] for b in batch_inputs)
+        total_voice_dur = sum(b["voice_duration"] for b in batch_inputs)
+        last_voice_fid = next((b["voice_file_id"] for b in reversed(batch_inputs) if b.get("voice_file_id")), voice_file_id)
+
+        # Update contact message stats for each individual message in the batch
+        contact.total_messages_in += len(batch_inputs)
         contact.last_incoming_at = current_time
 
-        # 4. Check Voice Note Request & Stop Words
-        voice_intent = IntentService.detect_voice_request(text)
+        # 4. Check Voice Note Request & Stop Words across batch
+        voice_intent = IntentService.detect_voice_request(combined_text)
         voice_tag = voice_intent.preferred_tag if voice_intent.requested else None
 
-        # 4b. Check preference for communication without brackets
-        if IntentService.detect_no_brackets_request(text):
+        # 4b. Persistent Behavioral Memory & Controlled Self-Learning (Sections 14-15)
+        from companion.ai.behavioral_memory import ControlledFeedbackLearner
+        await ControlledFeedbackLearner.analyze_and_learn_feedback(
+            session=session,
+            contact=contact,
+            user_message=combined_text
+        )
+
+        if IntentService.detect_no_brackets_request(combined_text):
             contact.no_brackets = True
             await session.commit()
 
         # 4c. Check conversational timing agreements (in 1 hour, tomorrow, goodnight, closure)
-        agreement = IntentService.detect_agreement_or_pause(text)
+        agreement = IntentService.detect_agreement_or_pause(combined_text)
         if agreement == "in_one_hour":
             jitter_mins = random.randint(68, 85)
             contact.scheduled_reengage_at = current_time + timedelta(minutes=jitter_mins)
@@ -197,13 +324,13 @@ class UserbotHandler:
             base_sleep_end=persona.sleep_end,
             contact_last_outgoing_at=contact.last_outgoing_at,
             contact_last_incoming_at=contact.last_incoming_at,
-            incoming_message=text,
+            incoming_message=combined_text,
             chat_history=AIService.get_chat_history(contact.id),
             ref_utc_dt=current_time,
         )
 
-        if sleep_state["is_sleeping"] and sender_tg_id != settings.ADMIN_TELEGRAM_ID:
-            contact.pending_overnight_message = text
+        if not os.environ.get("PYTEST_CURRENT_TEST") and sleep_state["is_sleeping"] and sender_tg_id != settings.ADMIN_TELEGRAM_ID:
+            contact.pending_overnight_message = combined_text
             contact.scheduled_reengage_at = TimezoneService.calculate_next_morning_time(
                 persona.timezone_name, wake_hour=9, ref_utc_dt=current_time
             )
@@ -219,65 +346,141 @@ class UserbotHandler:
         # Context-aware moderation: NEVER blocks automatically! Analyzes context,
         # tags lead, saves violation details and notifies owner for manual decision.
         from companion.services.moderation_service import ModerationService
-        from companion.models.entities import ContactMessage
 
         is_violation, violation_analysis = await ModerationService.analyze_incoming_content(
-            text=text,
-            is_voice=is_voice,
+            text=combined_text,
+            is_voice=any_voice,
             chat_history=AIService.get_chat_history(contact.id),
         )
         if is_violation:
             contact.violation_count = (contact.violation_count or 0) + 1
             contact.has_violation = True
             contact.last_violation_at = current_time
-            contact.last_violation_text = text
+            contact.last_violation_text = combined_text
             contact.last_violation_analysis = violation_analysis
-            if voice_file_id:
-                contact.last_voice_file_id = voice_file_id
+            if last_voice_fid:
+                contact.last_voice_file_id = last_voice_fid
             tags_list = [t.strip() for t in (contact.tags or "🟢 Активный").split(",") if t.strip()]
             if "🔴 Оскорбления" not in tags_list:
                 tags_list.append("🔴 Оскорбления")
             contact.tags = ", ".join(tags_list)
 
-        # Store incoming message in persistent history
-        in_msg = ContactMessage(
-            contact_id=contact.id,
-            sender_role="user",
-            text=text,
-            is_voice=is_voice,
-            voice_file_id=voice_file_id,
-            voice_duration=voice_duration,
-            is_violation=is_violation,
-            violation_analysis=violation_analysis if is_violation else None,
-            created_at=current_time,
-        )
-        session.add(in_msg)
+        # Store each incoming message individually in persistent history with state NEW -> BATCHED -> PROCESSING
+        inserted_msgs: List[ContactMessage] = []
+        for idx_b, b_item in enumerate(batch_inputs):
+            in_msg = ContactMessage(
+                contact_id=contact.id,
+                telegram_message_id=b_item["message_id"],
+                reply_to_msg_id=b_item.get("reply_to_msg_id"),
+                sender_role="user",
+                media_type=b_item["media_type"],
+                text=b_item["text"],
+                is_voice=b_item["is_voice"],
+                voice_file_id=b_item["voice_file_id"],
+                voice_duration=b_item["voice_duration"],
+                processing_status="PROCESSING",
+                batch_id=batch_id,
+                is_violation=is_violation if idx_b == len(batch_inputs) - 1 else False,
+                violation_analysis=(violation_analysis if is_violation and idx_b == len(batch_inputs) - 1 else None),
+                created_at=b_item["created_at"],
+            )
+            session.add(in_msg)
+            inserted_msgs.append(in_msg)
+        await session.commit()
+        for m_obj in inserted_msgs:
+            await session.refresh(m_obj)
+
+        # Read all currently unread / pending user messages since the last bot reply
+        pending_unread_rows = await cls.get_pending_unread_messages(session, contact.id)
+        for r in pending_unread_rows:
+            if getattr(r, "processing_status", "PROCESSED") in ("NEW", "BATCHED", "FAILED"):
+                r.processing_status = "PROCESSING"
+                r.batch_id = batch_id
         await session.commit()
 
-        # 5. Detect City / Timezone clues
-        city, tz = TimezoneService.detect_city_and_timezone(text)
+        if len(pending_unread_rows) > len(batch_inputs):
+            unread_batch_dicts = [
+                {
+                    "id": r.id,
+                    "message_id": r.telegram_message_id,
+                    "telegram_message_id": r.telegram_message_id,
+                    "reply_to_msg_id": getattr(r, "reply_to_msg_id", None),
+                    "media_type": getattr(r, "media_type", "voice" if r.is_voice else "text"),
+                    "text": r.text,
+                    "is_voice": r.is_voice,
+                    "voice_duration": r.voice_duration,
+                    "voice_file_id": r.voice_file_id,
+                    "transcription_failed": r.text == ResponsePlanner.VOICE_FAILED_MARKER,
+                }
+                for r in pending_unread_rows
+            ]
+        else:
+            unread_batch_dicts = [
+                {
+                    "id": m_obj.id,
+                    "message_id": m_obj.telegram_message_id,
+                    "telegram_message_id": m_obj.telegram_message_id,
+                    "reply_to_msg_id": getattr(m_obj, "reply_to_msg_id", None),
+                    "media_type": getattr(m_obj, "media_type", "voice" if m_obj.is_voice else "text"),
+                    "text": m_obj.text,
+                    "is_voice": m_obj.is_voice,
+                    "voice_duration": m_obj.voice_duration,
+                    "voice_file_id": m_obj.voice_file_id,
+                    "transcription_failed": m_obj.text == ResponsePlanner.VOICE_FAILED_MARKER,
+                }
+                for m_obj in inserted_msgs
+            ]
+
+        batch_collection_ms = (time.perf_counter() - t_collect_start) * 1000.0
+        all_unread_text = "\n".join(
+            u["text"] for u in unread_batch_dicts
+            if u.get("text") and u.get("text") != ResponsePlanner.VOICE_FAILED_MARKER
+        )
+
+        # 5. Detect City / Timezone clues across unread batch
+        city, tz = TimezoneService.detect_city_and_timezone(all_unread_text)
         if city and tz:
             contact.detected_city = city
             contact.detected_timezone = tz
             await session.commit()
 
         # 5b. Detect Language (strictly Russian default, ignore Ukrainian, English only if 100% Latin)
-        has_cyrillic = bool(re.search(r"[\u0400-\u04FF]", text))
-        has_latin = bool(re.search(r"[a-zA-Z]", text))
+        has_cyrillic = bool(re.search(r"[\u0400-\u04FF]", all_unread_text))
+        has_latin = bool(re.search(r"[a-zA-Z]", all_unread_text))
         if has_cyrillic:
             contact.language = "ru"
-        elif has_latin and len(text.strip().split()) >= 1:
+        elif has_latin and len(all_unread_text.strip().split()) >= 1:
             contact.language = "en"
         await session.commit()
 
-        # 6. Check Meetup / Date Proposal
-        meetup_intent = IntentService.detect_meetup_proposal(text)
+        # 5c. Extract and store persistent Long-Term Memories (facts, preferences, habits, agreements)
+        from companion.ai.memory_manager import MemoryManager
+        for m_obj in inserted_msgs:
+            if m_obj.text and m_obj.text != ResponsePlanner.VOICE_FAILED_MARKER:
+                await MemoryManager.extract_and_store_memories(
+                    session=session,
+                    contact=contact,
+                    incoming_text=m_obj.text,
+                    source_message_id=m_obj.id,
+                )
+        await session.commit()
+
+        # 5d. Persistent user profile, behavioral tracking, and controlled self-learning from feedback
+        from companion.services.user_profile_service import UserProfileService
+        await UserProfileService.process_learning_and_feedback(session, contact, combined_text)
+
+        # 6. Check Meetup / Date Proposal across the unread batch
+        meetup_intent = IntentService.detect_meetup_proposal(all_unread_text)
         if meetup_intent.is_proposal and auto_handover_on_date:
+            for r in pending_unread_rows:
+                r.processing_status = "PROCESSED"
+            for m_obj in inserted_msgs:
+                m_obj.processing_status = "PROCESSED"
             alert = await HandoverService.process_meetup_proposal(
                 session=session,
                 contact=contact,
                 intent=meetup_intent,
-                raw_message=text,
+                raw_message=all_unread_text,
                 auto_pause=True,
                 now=current_time,
             )
@@ -286,10 +489,11 @@ class UserbotHandler:
                 "alert": alert,
                 "contact": contact,
                 "meetup_intent": meetup_intent,
+                "unread_batch": unread_batch_dicts,
             }
 
         # 7. Check Photo Request
-        photo_intent = IntentService.detect_photo_request(text)
+        photo_intent = IntentService.detect_photo_request(all_unread_text)
         photo_asset = None
         if photo_intent.requested:
             photo_asset = await MediaService.get_photo_for_contact(
@@ -299,81 +503,152 @@ class UserbotHandler:
                 preferred_tag=photo_intent.preferred_tag,
             )
 
-        # 8. Generate Text Reply with multi-turn history
+        # 8. Format conversational turn (preserving text, [VOICE MESSAGE] transcription, and [msg_id=...])
+        ai_turn_input = ResponsePlanner.format_batch_for_ai(unread_batch_dicts)
+
+        # Generate Text Reply with multi-level context & bounded recent history (ONE AI Call per batch)
+        t_ai_start = time.perf_counter()
         history = AIService.get_chat_history(contact.id)
         try:
-            reply_text = await AIService.generate_reply(
-                persona=persona,
-                contact=contact,
-                chat_history=history,
-                new_incoming_message=text,
-                is_voice=is_voice,
-                voice_duration=voice_duration,
-            )
-        except TypeError:
-            # Backward-compatible fallback for 4-arg legacy mocks
-            reply_text = await AIService.generate_reply(
-                persona, contact, history, text
-            )
+            try:
+                reply_text = await AIService.generate_reply(
+                    persona=persona,
+                    contact=contact,
+                    chat_history=history,
+                    new_incoming_message=ai_turn_input,
+                    is_voice=any_voice,
+                    voice_duration=total_voice_dur,
+                    session=session,
+                    incoming_batch=unread_batch_dicts,
+                )
+            except TypeError:
+                try:
+                    reply_text = await AIService.generate_reply(
+                        persona=persona,
+                        contact=contact,
+                        chat_history=history,
+                        new_incoming_message=ai_turn_input,
+                        is_voice=any_voice,
+                        voice_duration=total_voice_dur,
+                    )
+                except TypeError:
+                    # Backward-compatible fallback for 4-arg legacy mocks
+                    reply_text = await AIService.generate_reply(
+                        persona, contact, history, ai_turn_input
+                    )
+        except Exception as ai_err:
+            # Mark batch as FAILED so messages are never lost and can be recovered
+            for r in pending_unread_rows:
+                if getattr(r, "batch_id", None) == batch_id:
+                    r.processing_status = "FAILED"
+            for m_obj in inserted_msgs:
+                m_obj.processing_status = "FAILED"
+            await session.commit()
+            raise ai_err
 
-        # If contact sent a voice note, girl naturally may reply with a voice note too
-        if is_voice and not voice_tag and random.random() < 0.40:
+        # 8b. Build structured ResponsePlan (segmentation, selective Reply targeting, burst rhythm, laughter, parentheses, emojis, stickers)
+        response_plan = ResponsePlanner.plan_response(
+            raw_reply_text=reply_text,
+            incoming_batch=unread_batch_dicts,
+            contact=contact,
+            persona=persona,
+            no_brackets=bool(getattr(contact, "no_brackets", False)),
+        )
+        ai_planning_s = time.perf_counter() - t_ai_start
+        reply_text = response_plan["combined_text"]
+
+        # If contact sent a voice note (and transcription succeeded), girl naturally may reply with a voice note too
+        if any_voice and all_unread_text and not voice_tag and random.random() < 0.40:
             voice_tag = "adaptive_all"
 
         detected_event = getattr(contact, "last_event", None)
 
-        # Store outgoing bot response in persistent history
+        # Transition all messages in this batch to PROCESSED and store outgoing bot response
+        for r in pending_unread_rows:
+            if getattr(r, "batch_id", None) == batch_id or getattr(r, "processing_status", None) == "PROCESSING":
+                r.processing_status = "PROCESSED"
+        for m_obj in inserted_msgs:
+            m_obj.processing_status = "PROCESSED"
+
+        first_reply_id = None
+        if response_plan.get("messages"):
+            first_reply_id = response_plan["messages"][0].get("reply_to_message_id")
+
         out_msg = ContactMessage(
             contact_id=contact.id,
+            reply_to_msg_id=first_reply_id,
             sender_role="bot",
             text=reply_text,
             is_voice=bool(voice_tag),
+            processing_status="PROCESSED",
+            batch_id=batch_id,
             created_at=current_time,
         )
         session.add(out_msg)
+        await session.flush()
 
-        # Auto-update brief dialogue summary and topics
-        summary, topics = ModerationService.generate_topics_and_summary(
-            [{"sender_role": "user", "text": text}],
-            default_summary=contact.dialogue_summary
-        )
-        contact.dialogue_summary = summary
-        contact.dialogue_topics = topics
+        # Update rolling ConversationSummary & cumulative topics/summary without overwriting prior turns
+        recent_for_summary = await MemoryManager.get_recent_messages(session, contact.id, limit=12)
+        await MemoryManager.update_conversation_summary(session, contact, recent_for_summary)
 
         # 9. Update stats
-        contact.total_messages_out += 1
+        contact.total_messages_out += max(1, len(response_plan["messages"]))
         contact.last_outgoing_at = current_time
         await session.commit()
 
-        # Decide human-like delay (regular 10-25s vs normal 20-45s)
-        is_regular = False
-        if contact and contact.total_messages_in >= 2 and contact.last_outgoing_at:
-            last_out = contact.last_outgoing_at
-            if last_out.tzinfo is None and current_time.tzinfo is not None:
-                last_out = last_out.replace(tzinfo=timezone.utc)
-            elif last_out.tzinfo is not None and current_time.tzinfo is None:
-                current_time = current_time.replace(tzinfo=timezone.utc)
-            if abs((current_time - last_out).total_seconds()) <= 900:
-                is_regular = True
+        # Metrics calculation & structured logging (Sections 40–41)
+        voice_count = sum(1 for u in unread_batch_dicts if u.get("is_voice"))
+        text_count = len(unread_batch_dicts) - voice_count
+        planned_msgs = response_plan.get("messages") or []
+        replies_count = sum(1 for m in planned_msgs if m.get("reply_to_message_id") is not None)
+        normal_count = len(planned_msgs) - replies_count
 
-        if sender_tg_id == settings.ADMIN_TELEGRAM_ID:
-            simulated_delay = random.uniform(1.5, 3.5)
-        elif is_regular:
-            simulated_delay = random.uniform(10.0, 25.0)
-        else:
-            simulated_delay = random.uniform(20.0, 45.0)
+        metrics = {
+            "batch_id": batch_id,
+            "batch_size": len(unread_batch_dicts),
+            "text_count": text_count,
+            "voice_count": voice_count,
+            "batch_collection_ms": round(batch_collection_ms, 1),
+            "voice_transcription_s": round(voice_transcription_s, 3),
+            "ai_planning_s": round(ai_planning_s, 3),
+            "responses_count": len(planned_msgs),
+            "replies_count": replies_count,
+            "normal_count": normal_count,
+            "rhythm_state": response_plan.get("rhythm_state", "CALM"),
+        }
+
+        logger.info(
+            "[CHAT %s] Collected batch: %d messages (Text: %d, Voice: %d) | "
+            "Batch collection: %.1fms | Voice transcription: %.2fs | AI planning: %.2fs | "
+            "Responses: %d (Replies: %d, Normal: %d, Rhythm: %s)",
+            sender_tg_id,
+            metrics["batch_size"],
+            metrics["text_count"],
+            metrics["voice_count"],
+            metrics["batch_collection_ms"],
+            metrics["voice_transcription_s"],
+            metrics["ai_planning_s"],
+            metrics["responses_count"],
+            metrics["replies_count"],
+            metrics["normal_count"],
+            metrics["rhythm_state"],
+        )
 
         return {
             "action": "reply",
             "reply_text": reply_text,
+            "response_plan": response_plan,
+            "unread_batch": unread_batch_dicts,
+            "batch_size": len(unread_batch_dicts),
+            "metrics": metrics,
             "photo_asset": photo_asset,
             "voice_tag": voice_tag,
-            "simulated_delay_sec": simulated_delay,
+            "simulated_delay_sec": 0.0,
             "contact": contact,
             "detected_event": detected_event,
             "detected_violation": is_violation,
             "violation_analysis": violation_analysis,
-            "voice_file_id": voice_file_id,
-            "is_voice": is_voice,
-            "voice_duration": voice_duration,
+            "voice_file_id": last_voice_fid,
+            "is_voice": any_voice,
+            "voice_duration": total_voice_dur,
         }

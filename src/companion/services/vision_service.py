@@ -60,29 +60,18 @@ class VisionService:
         )
 
         try:
-            client = genai.Client(api_key=api_key)
+            from companion.ai.gemini_client import GeminiClient
             part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-
-            models_to_try = [
-                settings.GEMINI_MODEL,
-                "gemini-flash-lite-latest",
-                "gemini-flash-latest",
-                "gemini-3.8-flash",
-            ]
-            for m in models_to_try:
-                if not m:
-                    continue
-                try:
-                    res = client.models.generate_content(
-                        model=m,
-                        contents=[part, prompt]
-                    )
-                    if res and res.text:
-                        desc = res.text.strip().replace("\n", " ")
-                        logger.info("Vision analysis succeeded (%s): %s", m, desc[:100])
-                        return desc
-                except Exception as model_err:
-                    logger.debug("Vision model %s failed: %s", m, model_err)
+            desc = await GeminiClient.generate_content(
+                contents=[part, prompt],
+                temperature=0.3,
+                max_output_tokens=200,
+                api_key=api_key,
+            )
+            if desc:
+                clean_desc = desc.strip().replace("\n", " ")
+                logger.info("Vision analysis succeeded: %s", clean_desc[:100])
+                return clean_desc
         except Exception as e:
             logger.error("Vision API description error: %s", e)
         return None

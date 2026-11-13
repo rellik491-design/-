@@ -7,16 +7,6 @@ from companion.models.enums import PlanDuration
 
 
 class SubscriptionService:
-    @staticmethod
-    def calculate_expiry(
-        plan: PlanDuration,
-        current_expires_at: Optional[datetime] = None,
-        now: Optional[datetime] = None,
-    ) -> TupleExpiry:
-        pass
-
-
-class SubscriptionService:
     @classmethod
     async def get_active_subscription(
         cls, session: AsyncSession, user_id: int, now: Optional[datetime] = None
@@ -133,6 +123,7 @@ class SubscriptionService:
 
         return {
             "is_active": True,
+            "plan": sub.plan.value,
             "plan_name": sub.plan.value,
             "expires_at_str": exp.strftime("%d.%m.%Y %H:%M"),
             "remaining_str": " ".join(remaining_parts),
@@ -143,6 +134,40 @@ class SubscriptionService:
             "max_daily_voice": sub.max_daily_voice,
             "voice_used_today": sub.voice_used_today,
         }
+
+    @classmethod
+    async def get_subscription_summary(
+        cls, session: AsyncSession, user_id: int, now: Optional[datetime] = None
+    ) -> dict:
+        """Async helper that fetches the active subscription and returns its detailed status dictionary."""
+        sub = await cls.get_active_subscription(session, user_id, now=now)
+        return cls.get_detailed_status(sub, now=now)
+
+    @classmethod
+    async def grant_custom_days(
+        cls,
+        session: AsyncSession,
+        user_id: int,
+        days: int,
+        plan: PlanDuration = PlanDuration.DAYS_31,
+        now: Optional[datetime] = None,
+    ) -> Subscription:
+        """Grants a custom number of subscription days to the user."""
+        return await cls.activate_plan(
+            session=session,
+            user_id=user_id,
+            plan=plan,
+            custom_days=days,
+            now=now,
+            extend=True,
+        )
+
+    @classmethod
+    async def cancel_active_subscription(
+        cls, session: AsyncSession, user_id: int, now: Optional[datetime] = None
+    ) -> bool:
+        """Alias for cancel_subscription used by the Mini App API."""
+        return await cls.cancel_subscription(session, user_id, now=now)
 
     @classmethod
     async def check_and_expire_subscriptions(

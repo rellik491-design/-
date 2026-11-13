@@ -80,5 +80,34 @@ async def init_db():
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN dialogue_summary TEXT NULL")
             if "dialogue_topics" not in c_cols:
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN dialogue_topics VARCHAR(256) NULL")
+            if "preferred_name" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN preferred_name VARCHAR(64) NULL")
+            if "communication_style" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN communication_style VARCHAR(32) DEFAULT 'casual'")
+            if "preferred_response_length" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN preferred_response_length VARCHAR(32) DEFAULT 'medium'")
+            if "emoji_frequency" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN emoji_frequency VARCHAR(32) DEFAULT 'medium'")
+            if "likes_multi_message_responses" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN likes_multi_message_responses BOOLEAN DEFAULT 1")
+
+            # contact_messages
+            res_cm = sync_conn.exec_driver_sql("PRAGMA table_info(contact_messages)").fetchall()
+            cm_cols = [r[1] for r in res_cm]
+            if cm_cols:
+                if "telegram_message_id" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN telegram_message_id INTEGER NULL")
+                if "reply_to_msg_id" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN reply_to_msg_id INTEGER NULL")
+                if "media_type" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN media_type VARCHAR(24) DEFAULT 'text'")
+                if "processing_status" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN processing_status VARCHAR(24) DEFAULT 'PROCESSED'")
+                if "batch_id" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN batch_id VARCHAR(64) NULL")
+                if "is_edited" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN is_edited BOOLEAN DEFAULT 0")
+                if "is_deleted" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN is_deleted BOOLEAN DEFAULT 0")
 
         await conn.run_sync(_migrate_sqlite_columns)

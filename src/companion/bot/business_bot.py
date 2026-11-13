@@ -1,14 +1,15 @@
 import asyncio
+import time
 import random
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from companion.config import settings
-from companion.models.entities import AccountSession, User
+from companion.models.entities import AccountSession, User, Contact
 from companion.models.enums import AccountStatus
 from companion.services.invite_service import InviteService
 from companion.services.subscription_service import SubscriptionService
@@ -17,6 +18,7 @@ from companion.services.voice_service import VoiceService
 from companion.services.stt_service import STTService
 from companion.bot.userbot_handler import UserbotHandler
 from companion.bot.admin_notifier import AdminNotifier
+from companion.bot.response_planner import AsyncMessageBatcher, ResponsePlanner
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +27,30 @@ class BusinessChatBot:
     """
     Handles Telegram Business (Chat Automation) updates:
     - business_connection: when a user adds the bot to their Telegram account
-    - business_message: messages in personal chats managed by the bot
+    - business_message: messages in personal chats managed by the bot (15–20s reading cycle & batching)
+    - edited_business_message: edits to previously sent messages (updates DB without duplicate reply)
+    - deleted_business_messages: marks deleted messages in DB
     """
+
+    _chat_locks: Dict[str, asyncio.Lock] = {}
+    _batcher = AsyncMessageBatcher(
+        default_debounce_seconds=settings.MESSAGE_READ_INTERVAL_MIN,
+        max_batch_wait_seconds=settings.MESSAGE_READ_INTERVAL_MAX,
+    )
+
+    @classmethod
+    def _get_chat_lock(cls, connection_id: str, chat_id: int) -> asyncio.Lock:
+        key = f"{connection_id}:{chat_id}"
+        lock = cls._chat_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            cls._chat_locks[key] = lock
+            if len(cls._chat_locks) > 1000:
+                # Prune oldest unlocked entries
+                for k in list(cls._chat_locks.keys())[:200]:
+                    if not cls._chat_locks[k].locked():
+                        cls._chat_locks.pop(k, None)
+        return lock
 
     @classmethod
     async def process_business_connection(
@@ -165,54 +189,51 @@ class BusinessChatBot:
         now: Optional[datetime] = None,
         auto_handover_on_date: bool = False,
         simulate_delays: bool = True,
+        debounce_seconds: Optional[float] = None,
+        read_interval_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Processes 'business_message' update from Telegram.
-        1. Checks if connection & subscription are valid (not expired).
-        2. Detects if message was sent by the girl herself (human takeover).
-        3. If message is from a male contact, runs time-awareness, anti-spam,
-           meetup detection, and sends automated response via Bot API.
+        1. Checks idempotency and captures raw message metadata (text, voice, media, reply_to) in arrival order.
+        2. Waits for the 15–20s reading cycle (or configurable `read_interval_seconds` / `debounce_seconds`).
+        3. Collects ALL pending messages from the reading cycle in one batch.
+        4. Transcribes any voice messages in the batch, runs ONE AI analysis + ResponsePlanner,
+           marks messages read (✓✓), and immediately sends the planned responses.
         """
         connection_id = message_data.get("business_connection_id")
         chat_id = message_data.get("chat", {}).get("id")
         sender = message_data.get("from", {})
         sender_id = sender.get("id")
-        text = message_data.get("text", "").strip()
+        text = (message_data.get("text") or message_data.get("caption") or "").strip()
 
-        # Handle incoming voice notes, audio or video notes from contact (Speech-to-Text)
+        # Detect voice / video_note / audio metadata immediately without blocking arrival order
         voice_data = message_data.get("voice") or message_data.get("audio") or message_data.get("video_note")
-        is_voice = False
-        voice_duration = 0
+        is_voice = bool(voice_data)
+        voice_duration = int(voice_data.get("duration", 0)) if voice_data else 0
         file_id = voice_data.get("file_id") if voice_data else None
+        is_video = "video_note" in message_data
+        default_mime = "video/mp4" if is_video else "audio/ogg"
+        voice_mime = (voice_data.get("mime_type") if voice_data else None) or default_mime
+
+        if is_voice and not text:
+            text = "[PENDING_VOICE_TRANSCRIPTION]"
+
+        media_type = "text"
+        if is_video:
+            media_type = "video_note"
+        elif is_voice:
+            media_type = "voice"
+        elif "photo" in message_data:
+            media_type = "photo"
+        elif "sticker" in message_data:
+            media_type = "sticker"
+        elif "animation" in message_data:
+            media_type = "animation"
 
         token = bot_token or settings.ADMIN_BOT_TOKEN
-        if not text and voice_data:
-            voice_duration = voice_data.get("duration", 0)
-            is_video = "video_note" in message_data
-            default_mime = "video/mp4" if is_video else "audio/ogg"
-            mime = voice_data.get("mime_type") or default_mime
-            if file_id and token:
-                logger.info(
-                    "Incoming %s in business chat %s from %s (%d sec). Transcribing...",
-                    "video note" if is_video else "voice note",
-                    chat_id, sender_id, voice_duration
-                )
-                transcript, _ = await STTService.transcribe_telegram_voice(
-                    bot_token=token,
-                    file_id=file_id,
-                    mime_type=mime,
-                )
-                if transcript:
-                    text = transcript
-                    is_voice = True
-                    logger.info("Transcribed %s from %s: '%s'", "video note" if is_video else "voice note", sender_id, text)
-                else:
-                    logger.warning("STT transcription empty for media %s from %s", file_id, sender_id)
-                    text = "[Видео-сообщение (кружок)]" if is_video else "[Голосовое сообщение]"
-                    is_voice = True
 
         # Multimodal Vision: process stickers, GIFs (animations), photos and reply contexts
-        if not text or "photo" in message_data or "sticker" in message_data or "animation" in message_data or "reply_to_message" in message_data:
+        if not is_voice and (not text or "photo" in message_data or "sticker" in message_data or "animation" in message_data or "reply_to_message" in message_data):
             from companion.services.vision_service import VisionService
             try:
                 media_ctx = await VisionService.extract_media_context(
@@ -235,10 +256,119 @@ class BusinessChatBot:
                 elif "animation" in message_data:
                     text = "[Собеседник прислал GIF-анимацию/мем]"
 
-        if not connection_id or not chat_id or not text:
+        if not connection_id or not chat_id or (not text and not is_voice):
             logger.info("Business message ignored due to missing fields: conn=%s, chat=%s, has_text=%s", connection_id, chat_id, bool(text))
             return {"action": "ignored", "reason": "missing_fields"}
 
+        message_id = message_data.get("message_id")
+        reply_to_msg = message_data.get("reply_to_message") or {}
+        reply_to_msg_id = reply_to_msg.get("message_id") if isinstance(reply_to_msg, dict) else None
+        lock = cls._get_chat_lock(str(connection_id), int(chat_id))
+
+        # Idempotency check under short lock before reading cycle
+        if message_id is not None:
+            async with lock:
+                from companion.models.entities import ProcessedUpdate
+                update_key = f"biz_msg:{connection_id}:{chat_id}:{message_id}"
+                existing_upd = (
+                    await session.execute(
+                        select(ProcessedUpdate).where(ProcessedUpdate.update_key == update_key)
+                    )
+                ).scalars().first()
+                if existing_upd:
+                    logger.info("Duplicate business_message skipped (idempotent key=%s)", update_key)
+                    return {"action": "ignored", "reason": "duplicate_message"}
+                session.add(
+                    ProcessedUpdate(
+                        update_key=update_key,
+                        update_type="business_message",
+                        chat_id=int(chat_id),
+                    )
+                )
+                await session.commit()
+
+        is_mock = (not simulate_delays) or (token in ("mock_token", "test_token"))
+        explicit_interval = read_interval_seconds if read_interval_seconds is not None else debounce_seconds
+        if explicit_interval is not None:
+            eff_interval = max(0.0, float(explicit_interval))
+        elif is_mock:
+            eff_interval = 0.0
+        else:
+            eff_interval = random.uniform(
+                float(getattr(settings, "MESSAGE_READ_INTERVAL_MIN", 15.0)),
+                float(getattr(settings, "MESSAGE_READ_INTERVAL_MAX", 20.0)),
+            )
+
+        batch_item = {
+            "text": text,
+            "message_id": message_id,
+            "telegram_message_id": message_id,
+            "reply_to_msg_id": reply_to_msg_id,
+            "media_type": media_type,
+            "is_voice": is_voice,
+            "voice_duration": voice_duration,
+            "voice_file_id": file_id,
+            "voice_mime": voice_mime,
+            "sender": sender,
+            "sender_id": sender_id,
+            "message_data": message_data,
+            "created_at": now or datetime.now(timezone.utc),
+        }
+
+        async def _execute_batch(collected_items: List[Dict[str, Any]]) -> Dict[str, Any]:
+            last_item = collected_items[-1]
+            async with lock:
+                return await cls._process_business_message_locked(
+                    session=session,
+                    message_data=last_item["message_data"],
+                    connection_id=connection_id,
+                    chat_id=chat_id,
+                    sender=last_item["sender"],
+                    sender_id=last_item["sender_id"],
+                    text=last_item["text"],
+                    is_voice=any(it["is_voice"] for it in collected_items),
+                    voice_duration=sum(it["voice_duration"] for it in collected_items),
+                    file_id=last_item["voice_file_id"],
+                    message_id=last_item["message_id"],
+                    bot_token=bot_token,
+                    now=now,
+                    auto_handover_on_date=auto_handover_on_date,
+                    simulate_delays=simulate_delays,
+                    incoming_batch=collected_items,
+                )
+
+        if eff_interval > 0:
+            scope_key = f"biz:{connection_id}:{chat_id}"
+            return await cls._batcher.enqueue_and_wait(
+                scope_key=scope_key,
+                item=batch_item,
+                processor=_execute_batch,
+                debounce_seconds=eff_interval,
+            )
+        else:
+            return await _execute_batch([batch_item])
+
+    @classmethod
+    async def _process_business_message_locked(
+        cls,
+        session: AsyncSession,
+        message_data: Dict[str, Any],
+        connection_id: str,
+        chat_id: int,
+        sender: Dict[str, Any],
+        sender_id: Optional[int],
+        text: str,
+        is_voice: bool,
+        voice_duration: int,
+        file_id: Optional[str],
+        message_id: Optional[int],
+        bot_token: Optional[str] = None,
+        now: Optional[datetime] = None,
+        auto_handover_on_date: bool = False,
+        simulate_delays: bool = True,
+        incoming_batch: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        token = bot_token or settings.ADMIN_BOT_TOKEN
         logger.info(
             "Incoming business message in chat %s from sender %s (conn: %s): text='%s', is_voice=%s",
             chat_id, sender_id, connection_id, text[:60], is_voice
@@ -303,6 +433,53 @@ class BusinessChatBot:
             return {"action": "human_takeover_paused", "chat_id": chat_id}
 
         # 3. Message from male interlocutor -> Run standard processing pipeline with quest funnel
+        # Immediately mark all messages in this batch as read in Telegram (two checkmarks ✓✓)
+        is_mock = (not simulate_delays) or (token in ("mock_token", "test_token"))
+        if token and not is_mock:
+            if incoming_batch:
+                for b_item in incoming_batch:
+                    b_msg_id = b_item.get("telegram_message_id") or b_item.get("message_id")
+                    if b_msg_id:
+                        await cls.read_business_message(token, connection_id, chat_id, b_msg_id)
+            elif message_id:
+                await cls.read_business_message(token, connection_id, chat_id, message_id)
+
+        # Natural listening simulation if the batch contains incoming voice notes
+        batch_voice_durations = [
+            int(b.get("voice_duration") or 0)
+            for b in (incoming_batch or [])
+            if b.get("is_voice") or b.get("media_type") in ("voice", "video_note")
+        ]
+        if is_voice and voice_duration > 0:
+            batch_voice_durations.append(voice_duration)
+
+        if batch_voice_durations and not is_mock:
+            max_voice_len = max(batch_voice_durations)
+            listen_pause = min(max(float(max_voice_len), 1.2), 5.0)
+            logger.info(
+                "[CHAT %s] Simulating listening to voice note (%ds) for %.1fs before AI response",
+                chat_id, max_voice_len, listen_pause
+            )
+            await asyncio.sleep(listen_pause)
+
+            # Attempt to clear the blue circle (•) via MTProto ReadMessageContentsRequest if Telethon is configured
+            try:
+                from companion.services.telethon_service import TelethonService
+                voice_msg_ids = []
+                if incoming_batch:
+                    for b_item in incoming_batch:
+                        if b_item.get("is_voice") or b_item.get("media_type") in ("voice", "video_note"):
+                            v_id = b_item.get("telegram_message_id") or b_item.get("message_id")
+                            if v_id:
+                                voice_msg_ids.append(v_id)
+                elif message_id and is_voice:
+                    voice_msg_ids.append(message_id)
+
+                if voice_msg_ids:
+                    await TelethonService.mark_voice_contents_listened(chat_id, voice_msg_ids)
+            except Exception as e_tel:
+                logger.debug("TelethonService mark contents skipped: %s", e_tel)
+
         res = await UserbotHandler.process_incoming_message(
             session=session,
             user_id=account.user_id,
@@ -316,6 +493,9 @@ class BusinessChatBot:
             is_voice=is_voice,
             voice_duration=voice_duration,
             voice_file_id=file_id,
+            telegram_message_id=message_id,
+            incoming_batch=incoming_batch,
+            bot_token=token,
         )
 
         # Subscription owner lookup
@@ -331,7 +511,12 @@ class BusinessChatBot:
         if action in ("ignored", "sleeping_overnight"):
             return res
 
-        alert_user_message = f"🎙 [ГС {voice_duration} сек]: «{text}»" if is_voice else text
+        unread_batch_res = res.get("unread_batch") or []
+        combined_transcribed = " | ".join(
+            u["text"] for u in unread_batch_res
+            if u.get("text") and u.get("text") != ResponsePlanner.VOICE_FAILED_MARKER
+        ) or text
+        alert_user_message = f"🎙 [ГС {voice_duration} сек]: «{combined_transcribed}»" if is_voice else combined_transcribed
 
         detected_event = res.get("detected_event")
         if detected_event == "DATE_PROPOSED":
@@ -379,45 +564,48 @@ class BusinessChatBot:
             token = bot_token or settings.ADMIN_BOT_TOKEN
             reply_text = res.get("reply_text")
             voice_tag = res.get("voice_tag")
+            response_plan = res.get("response_plan") or {}
+            planned_messages = response_plan.get("messages") or [
+                {"text": b.strip(), "reply_to_message_id": None}
+                for b in (reply_text or "").split("||")
+                if b.strip()
+            ]
+            planned_sticker = response_plan.get("sticker")
+            delay_range = response_plan.get("inter_message_delay") or (
+                float(getattr(settings, "INTER_MESSAGE_DELAY_MIN", 0.5)),
+                float(getattr(settings, "INTER_MESSAGE_DELAY_MAX", 1.2)),
+            )
             is_mock = (not simulate_delays) or (token in ("mock_token", "test_token"))
             if token and reply_text:
-                delays = cls.calculate_dynamic_delays(contact, now=now, reply_text=reply_text, incoming_text=text)
+                t_send_start = time.perf_counter()
 
-                # 1. Unread pause (пауза до прочтения - имитация того, что девушка не сидит 24/7 в чате)
-                # 15-35 сек или 1-2 мин при активном общении; 4-8 мин при нерегулярном
-                if not is_mock:
-                    logger.info(
-                        "Business chat %s: dynamic delay (regular=%s): unread=%.1fs, thinking=%.1fs, typing=%.1fs",
-                        chat_id, delays["is_regular"], delays["unread_delay"], delays["thinking_delay"], delays["typing_delay"]
-                    )
-                    await asyncio.sleep(delays["unread_delay"])
-
-                # 2. Отметка о прочтении -> Две галочки (✓✓)
+                # 1. Immediately mark all collected messages in the batch as read -> Two checkmarks (✓✓)
                 message_id = message_data.get("message_id")
-                await cls.read_business_message(token, connection_id, chat_id, message_id)
+                if incoming_batch:
+                    for b_item in incoming_batch:
+                        b_msg_id = b_item.get("telegram_message_id") or b_item.get("message_id")
+                        if b_msg_id:
+                            await cls.read_business_message(token, connection_id, chat_id, b_msg_id)
+                else:
+                    await cls.read_business_message(token, connection_id, chat_id, message_id)
 
-                # 3. Пауза на осмысление после прочтения
-                if not is_mock:
-                    await asyncio.sleep(delays["thinking_delay"])
-
-                # 4. Отправка ответа (ГС или текст с органичным набором)
+                # 2. Fast, responsive delivery of the planned batch response (no 15–45s unread stall after AI!)
                 if voice_tag:
+                    await cls.send_business_chat_action(token, connection_id, chat_id, "record_voice")
                     if not is_mock:
-                        await cls.send_business_chat_action(token, connection_id, chat_id, "record_voice")
-                        await asyncio.sleep(random.uniform(3.0, 5.0))
+                        await asyncio.sleep(random.uniform(1.0, 2.0))
                     await VoiceService.send_telegram_voice_note(
                         bot_token=token,
                         chat_id=chat_id,
                         voice_tag=voice_tag,
                         business_connection_id=connection_id,
                     )
-                elif VoiceService.should_send_voice(user_message=text, bot_reply=reply_text, is_incoming_voice=is_voice):
+                elif VoiceService.should_send_voice(user_message=combined_transcribed, bot_reply=reply_text, is_incoming_voice=is_voice):
                     clean_voice = reply_text.replace("||", " ")
                     voice_text = VoiceService.shorten_for_voice(clean_voice, max_chars=180)
-                    duration = min(max(len(voice_text) / 12.0, 3.5), 8.5)
+                    await cls.send_business_chat_action(token, connection_id, chat_id, "record_voice")
                     if not is_mock:
-                        await cls.send_business_chat_action(token, connection_id, chat_id, "record_voice")
-                        await asyncio.sleep(duration)
+                        await asyncio.sleep(random.uniform(1.2, 2.2))
                     sent = await VoiceService.send_telegram_voice_note(
                         bot_token=token,
                         chat_id=chat_id,
@@ -425,37 +613,51 @@ class BusinessChatBot:
                         business_connection_id=connection_id,
                     )
                     if not sent:
-                        bubbles = [b.strip() for b in reply_text.split("||") if b.strip()]
-                        for idx, bubble in enumerate(bubbles):
+                        for idx, msg_item in enumerate(planned_messages):
+                            bubble = msg_item["text"]
+                            reply_to_id = msg_item.get("reply_to_message_id")
                             if idx > 0 and not is_mock:
-                                await asyncio.sleep(random.uniform(1.5, 3.0))
-                            typing_duration = max(3.0, min(2.0 + len(bubble) * 0.08 + random.uniform(1.0, 2.0), 12.0))
-                            if is_mock:
-                                await cls.send_business_chat_action(token, connection_id, chat_id, "typing")
-                            else:
-                                elapsed = 0.0
-                                while elapsed < typing_duration:
-                                    await cls.send_business_chat_action(token, connection_id, chat_id, "typing")
-                                    step = min(4.0, typing_duration - elapsed)
-                                    await asyncio.sleep(step)
-                                    elapsed += step
-                            await cls.send_business_message(token, connection_id, chat_id, bubble)
-                else:
-                    bubbles = [b.strip() for b in reply_text.split("||") if b.strip()]
-                    for idx, bubble in enumerate(bubbles):
-                        if idx > 0 and not is_mock:
-                            await asyncio.sleep(random.uniform(1.5, 3.0))
-                        typing_duration = max(3.0, min(2.0 + len(bubble) * 0.08 + random.uniform(1.0, 2.0), 12.0))
-                        if is_mock:
+                                await asyncio.sleep(random.uniform(delay_range[0], delay_range[1]))
                             await cls.send_business_chat_action(token, connection_id, chat_id, "typing")
-                        else:
-                            elapsed = 0.0
-                            while elapsed < typing_duration:
-                                await cls.send_business_chat_action(token, connection_id, chat_id, "typing")
-                                step = min(4.0, typing_duration - elapsed)
-                                await asyncio.sleep(step)
-                                elapsed += step
-                        await cls.send_business_message(token, connection_id, chat_id, bubble)
+                            if not is_mock:
+                                from companion.services.typing_simulator import TypingSimulator
+                                typing_duration = TypingSimulator.calculate_typing_duration(bubble)
+                                await asyncio.sleep(typing_duration)
+                            await cls.send_business_message(
+                                token, connection_id, chat_id, bubble, reply_to_message_id=reply_to_id
+                            )
+                else:
+                    for idx, msg_item in enumerate(planned_messages):
+                        bubble = msg_item["text"]
+                        reply_to_id = msg_item.get("reply_to_message_id")
+                        if idx > 0 and not is_mock:
+                            await asyncio.sleep(random.uniform(delay_range[0], delay_range[1]))
+                        await cls.send_business_chat_action(token, connection_id, chat_id, "typing")
+                        if not is_mock:
+                            from companion.services.typing_simulator import TypingSimulator
+                            typing_duration = TypingSimulator.calculate_typing_duration(bubble)
+                            await asyncio.sleep(typing_duration)
+                        await cls.send_business_message(
+                            token, connection_id, chat_id, bubble, reply_to_message_id=reply_to_id
+                        )
+                    if planned_sticker and planned_sticker.get("file_id"):
+                        if not is_mock:
+                            await asyncio.sleep(random.uniform(0.4, 0.8))
+                        await cls.send_business_sticker(
+                            token, connection_id, chat_id, planned_sticker["file_id"]
+                        )
+
+                telegram_send_s = time.perf_counter() - t_send_start
+                if isinstance(res.get("metrics"), dict):
+                    res["metrics"]["telegram_send_s"] = round(telegram_send_s, 3)
+                    logger.info(
+                        "[CHAT %s] Telegram sending: %.2fs | Responses: %d | Replies: %d | Normal messages: %d",
+                        chat_id,
+                        telegram_send_s,
+                        res["metrics"].get("responses_count", len(planned_messages)),
+                        res["metrics"].get("replies_count", 0),
+                        res["metrics"].get("normal_count", len(planned_messages)),
+                    )
 
         elif action == "handover_to_owner":
             alert_data = res.get("alert")
@@ -467,26 +669,82 @@ class BusinessChatBot:
 
     @staticmethod
     async def send_business_message(
-        bot_token: str, business_connection_id: str, chat_id: int, text: str
+        bot_token: str,
+        business_connection_id: str,
+        chat_id: int,
+        text: str,
+        reply_to_message_id: Optional[int] = None,
     ) -> bool:
-        """Sends message on behalf of the user's account using business_connection_id."""
+        """Sends message on behalf of the user's account using business_connection_id and native Telegram Reply."""
         if not bot_token or bot_token in ("mock_token", "test_token"):
             return True
+        from companion.bot.reply_validator import ReplyValidator
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        payload = {
+        payload: Dict[str, Any] = {
             "business_connection_id": business_connection_id,
             "chat_id": chat_id,
             "text": text,
         }
+        if reply_to_message_id is not None:
+            reply_params = ReplyValidator.build_reply_parameters(reply_to_message_id, is_business_connection=True)
+            if reply_params:
+                payload["reply_parameters"] = reply_params
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 res = await client.post(url, json=payload)
                 if res.status_code == 200:
                     return True
+                # If Telegram returns 400 Bad Request due to reply target, gracefully fallback to sending without reply
+                if res.status_code == 400 and "reply_parameters" in payload:
+                    logger.warning("Telegram rejected reply_parameters for chat %s (%s). Retrying without reply target.", chat_id, res.text)
+                    payload.pop("reply_parameters", None)
+                    payload.pop("reply_to_message_id", None)
+                    payload.pop("allow_sending_without_reply", None)
+                    retry_res = await client.post(url, json=payload)
+                    return retry_res.status_code == 200
+
                 logger.error("Failed to send business message in chat %s: HTTP %s - %s", chat_id, res.status_code, res.text)
                 return False
         except Exception as e:
             logger.error("Exception in send_business_message in chat %s: %s", chat_id, e)
+            return False
+
+    @staticmethod
+    async def send_business_sticker(
+        bot_token: str,
+        business_connection_id: str,
+        chat_id: int,
+        sticker_file_id: str,
+        reply_to_message_id: Optional[int] = None,
+    ) -> bool:
+        """Sends a curated sticker on behalf of the user's account using business_connection_id."""
+        if not bot_token or bot_token in ("mock_token", "test_token") or not sticker_file_id:
+            return True
+        from companion.bot.reply_validator import ReplyValidator
+        url = f"https://api.telegram.org/bot{bot_token}/sendSticker"
+        payload: Dict[str, Any] = {
+            "business_connection_id": business_connection_id,
+            "chat_id": chat_id,
+            "sticker": sticker_file_id,
+        }
+        if reply_to_message_id is not None:
+            reply_params = ReplyValidator.build_reply_parameters(reply_to_message_id, is_business_connection=True)
+            if reply_params:
+                payload["reply_parameters"] = reply_params
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(url, json=payload)
+                if res.status_code == 200:
+                    return True
+                if res.status_code == 400 and "reply_parameters" in payload:
+                    payload.pop("reply_parameters", None)
+                    payload.pop("reply_to_message_id", None)
+                    payload.pop("allow_sending_without_reply", None)
+                    retry_res = await client.post(url, json=payload)
+                    return retry_res.status_code == 200
+                return False
+        except Exception:
             return False
 
     @staticmethod
@@ -608,4 +866,118 @@ class BusinessChatBot:
             "typing_delay": typing_sec,
             "total_delay": unread + thinking + typing_sec,
         }
+
+    @classmethod
+    async def process_edited_business_message(
+        cls,
+        session: AsyncSession,
+        message_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Handles 'edited_business_message' updates cleanly:
+        Updates the stored ContactMessage text and marks `is_edited=True`,
+        extracting any new long-term facts without generating a duplicate AI reply
+        or double-counting incoming message statistics.
+        """
+        from companion.models.entities import Contact, ContactMessage
+        from companion.ai.memory_manager import MemoryManager
+
+        connection_id = message_data.get("business_connection_id")
+        chat_id = message_data.get("chat", {}).get("id")
+        message_id = message_data.get("message_id")
+        new_text = (message_data.get("text") or message_data.get("caption") or "").strip()
+
+        if not connection_id or not chat_id or not new_text:
+            return {"action": "ignored", "reason": "missing_edit_fields"}
+
+        stmt_acc = select(AccountSession).where(AccountSession.business_connection_id == connection_id)
+        account = (await session.execute(stmt_acc)).scalars().first()
+        if not account:
+            return {"action": "ignored", "reason": "account_not_found"}
+
+        stmt_c = select(Contact).where(Contact.user_id == account.user_id, Contact.tg_id == chat_id)
+        contact = (await session.execute(stmt_c)).scalars().first()
+        if not contact:
+            return {"action": "ignored", "reason": "contact_not_found"}
+
+        msg_row = None
+        if message_id is not None:
+            stmt_m = select(ContactMessage).where(
+                ContactMessage.contact_id == contact.id,
+                ContactMessage.telegram_message_id == message_id,
+            )
+            msg_row = (await session.execute(stmt_m)).scalars().first()
+
+        if not msg_row:
+            # Fallback to latest user message in this chat
+            stmt_last = (
+                select(ContactMessage)
+                .where(
+                    ContactMessage.contact_id == contact.id,
+                    ContactMessage.sender_role == "user",
+                    ContactMessage.is_deleted == False,
+                )
+                .order_by(ContactMessage.id.desc())
+                .limit(1)
+            )
+            msg_row = (await session.execute(stmt_last)).scalars().first()
+
+        if msg_row:
+            msg_row.text = new_text
+            msg_row.is_edited = True
+            await MemoryManager.extract_and_store_memories(
+                session=session,
+                contact=contact,
+                incoming_text=new_text,
+                source_message_id=msg_row.id,
+            )
+            await session.commit()
+            return {"action": "message_edited", "contact_id": contact.id, "message_id": msg_row.id}
+
+        return {"action": "ignored", "reason": "original_message_not_found"}
+
+    @classmethod
+    async def process_deleted_business_messages(
+        cls,
+        session: AsyncSession,
+        delete_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Handles 'deleted_business_messages' updates from Telegram Business API:
+        Marks corresponding ContactMessage rows as `is_deleted=True` so they are excluded
+        from AI context windows.
+        """
+        from companion.models.entities import Contact, ContactMessage
+
+        connection_id = delete_data.get("business_connection_id")
+        chat_id = delete_data.get("chat", {}).get("id")
+        message_ids = delete_data.get("message_ids") or []
+
+        if not connection_id or not chat_id or not message_ids:
+            return {"action": "ignored", "reason": "missing_delete_fields"}
+
+        stmt_acc = select(AccountSession).where(AccountSession.business_connection_id == connection_id)
+        account = (await session.execute(stmt_acc)).scalars().first()
+        if not account:
+            return {"action": "ignored", "reason": "account_not_found"}
+
+        stmt_c = select(Contact).where(Contact.user_id == account.user_id, Contact.tg_id == chat_id)
+        contact = (await session.execute(stmt_c)).scalars().first()
+        if not contact:
+            return {"action": "ignored", "reason": "contact_not_found"}
+
+        stmt_msgs = select(ContactMessage).where(
+            ContactMessage.contact_id == contact.id,
+            ContactMessage.telegram_message_id.in_(message_ids),
+        )
+        rows = (await session.execute(stmt_msgs)).scalars().all()
+        deleted_count = 0
+        for r in rows:
+            r.is_deleted = True
+            deleted_count += 1
+
+        if deleted_count > 0:
+            await session.commit()
+
+        return {"action": "messages_deleted", "deleted_count": deleted_count}
 

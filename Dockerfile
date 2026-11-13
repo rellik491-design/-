@@ -1,32 +1,43 @@
+# ============================================================
+# Stage 1: Build Telegram Mini App Frontend (React + TS + Vite)
+# ============================================================
+FROM node:20-slim AS frontend-builder
+WORKDIR /frontend
+COPY frontend/package.json ./
+RUN npm install --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
+# ============================================================
+# Stage 2: Production Backend API + Bot Engine Runtime
+# ============================================================
 FROM python:3.12-slim
 
-# Установка системных зависимостей (ffmpeg для мастеринга голосовых сообщений)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка менеджера пакетов uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.cargo/bin:$PATH"
 
 WORKDIR /app
 
-# Копирование спецификаций зависимостей
 COPY pyproject.toml uv.lock* ./
-
-# Установка зависимостей проекта
 RUN uv sync --frozen || uv sync
 
-# Копирование исходного кода и ассетов
 COPY src ./src
 COPY assets ./assets
 COPY scripts ./scripts
 COPY main.py ./
+COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
+EXPOSE 8080
 
-# Запуск бота в непрерывном режиме
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://localhost:8080/health || exit 1
+
 CMD ["uv", "run", "python", "main.py"]

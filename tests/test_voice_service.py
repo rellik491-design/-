@@ -151,3 +151,45 @@ def test_incoming_voice_probability():
         assert VoiceService.should_send_voice("привет", "привет", is_incoming_voice=True) is False
 
 
+def test_mastering_equalizer_post_processing():
+    """
+    Verifies user's exact mastering equalizer chain:
+    - Low Cut 62HZ 24dB/oct (cascaded 2-pole highpass)
+    - Bell 194hz -2.33dB
+    - Bell 437hz -1.12dB
+    - Bell 800hz -1.45dB
+    - Bell 2841hz +1dB
+    - High Shelf 6678hz +0.60db
+    - Output is genuine Telegram OGG Opus format
+    """
+    import subprocess
+    import imageio_ffmpeg
+    import time
+
+    # Generate a small sine audio sample in memory
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [ffmpeg, "-y", "-f", "lavfi", "-i", "sine=frequency=1000:duration=1", "-f", "mp3", "pipe:1"]
+    raw_mp3 = subprocess.run(cmd, capture_output=True).stdout
+    assert len(raw_mp3) > 100
+
+    t0 = time.perf_counter()
+    mastered = VoiceService.apply_mastering_equalizer(raw_mp3)
+    duration_s = time.perf_counter() - t0
+
+    # Must be valid OGG Opus with Telegram voice format
+    assert len(mastered) > 100
+    assert mastered[:4] == b"OggS"
+    # Fast processing (< 600ms)
+    assert duration_s < 0.60
+
+    # Check filter string contains exact user specifications
+    eq_str = VoiceService.MASTERING_EQ_FILTER
+    assert "highpass=f=62:poles=2,highpass=f=62:poles=2" in eq_str
+    assert "equalizer=f=194:width_type=q:width=1.0:gain=-2.33" in eq_str
+    assert "equalizer=f=437:width_type=q:width=1.0:gain=-1.12" in eq_str
+    assert "equalizer=f=800:width_type=q:width=1.0:gain=-1.45" in eq_str
+    assert "equalizer=f=2841:width_type=q:width=1.0:gain=1.0" in eq_str
+    assert "highshelf=f=6678:gain=0.60" in eq_str
+
+
+

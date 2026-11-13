@@ -201,18 +201,36 @@ class DialogueStyleEngine:
         return f"{adaptive_context}\n{cls.CORE_HUMAN_INSTRUCTIONS}"
 
     @classmethod
-    def humanize_text(cls, text: str, no_brackets: bool = False) -> str:
+    def humanize_text(
+        cls,
+        text: str,
+        no_brackets: bool = False,
+        incoming_text: str = "",
+        style: str = "adaptive_all",
+        contact_id: Optional[int] = None,
+    ) -> str:
         """
         Transforms text into 100% authentic mobile messenger speech:
         1. Strips all em-dashes and en-dashes.
-        2. Strictly controls and eliminates bracket spam.
-        3. Strips ending period.
-        4. Lowers first letter in 85% of cases.
-        5. Randomly drops 1 comma in 35% of cases to imitate fast typing.
-        6. Strips quotation marks.
+        2. Strictly controls and eliminates bracket spam (parentheses rare, primarily for flirt/playfulness).
+        3. Naturalizes Russian laughter to varied >= 5-char variants ('ахаха', 'ахахах', 'АХАХАХА').
+        4. Strips ending period.
+        5. Lowers first letter in 85% of cases.
+        6. Randomly drops 1 comma in 35% of cases to imitate fast typing.
+        7. Strips quotation marks.
         """
         if "||" in text:
-            return "||".join(cls.humanize_text(part, no_brackets=no_brackets) for part in text.split("||") if part.strip())
+            return "||".join(
+                cls.humanize_text(
+                    part,
+                    no_brackets=no_brackets,
+                    incoming_text=incoming_text,
+                    style=style,
+                    contact_id=contact_id,
+                )
+                for part in text.split("||")
+                if part.strip()
+            )
 
         cleaned = text.strip()
 
@@ -300,6 +318,21 @@ class DialogueStyleEngine:
                 cleaned = cleaned[:idx] + cleaned[idx + 1:]
                 cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
+        # 8. Naturalize laughter (minimum 5 chars, varied contextual intensity) & control parentheses
+        from companion.bot.response_planner import LaughterGenerator, ParenthesesController
+
+        cleaned = LaughterGenerator.naturalize_laughter_in_text(
+            cleaned,
+            incoming_text=incoming_text,
+            contact_id=contact_id,
+        )
+        cleaned = ParenthesesController.apply_parentheses_policy(
+            cleaned,
+            incoming_text=incoming_text,
+            style=style,
+            no_brackets=no_brackets,
+        )
+
         # Final guarantee: zero dashes and strict no-brackets check
         cleaned = cleaned.replace("—", "").replace("–", "")
         if no_brackets:
@@ -308,6 +341,19 @@ class DialogueStyleEngine:
         return cleaned
 
     @classmethod
-    def humanize_text_formatting(cls, text: str, no_brackets: bool = False) -> str:
+    def humanize_text_formatting(
+        cls,
+        text: str,
+        no_brackets: bool = False,
+        incoming_text: str = "",
+        style: str = "adaptive_all",
+        contact_id: Optional[int] = None,
+    ) -> str:
         """Alias for humanize_text to guarantee full backward compatibility."""
-        return cls.humanize_text(text, no_brackets=no_brackets)
+        return cls.humanize_text(
+            text,
+            no_brackets=no_brackets,
+            incoming_text=incoming_text,
+            style=style,
+            contact_id=contact_id,
+        )

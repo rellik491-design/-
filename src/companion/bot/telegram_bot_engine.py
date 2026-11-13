@@ -39,6 +39,8 @@ from companion.services.timezone_service import TimezoneService
 from companion.bot.userbot_handler import UserbotHandler
 from companion.bot.business_bot import BusinessChatBot
 from companion.bot.admin_notifier import AdminNotifier
+from companion.bot.manager_engine import ConversationManagerEngine, FLOW_LABELS
+from companion.ai.memory_manager import MemoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,7 @@ class TelegramBotEngine:
         self.offset = 0
         self._user_input_states: Dict[int, str] = {}
         self._cached_voice_files: Dict[str, str] = {}
+        self.manager = ConversationManagerEngine()
 
     async def start(self):
         self._running = True
@@ -218,6 +221,7 @@ class TelegramBotEngine:
         """
         user_commands = [
             {"command": "start", "description": "🚀 Главное меню и статус"},
+            {"command": "app", "description": "📱 Открыть Mini App панель управления"},
             {"command": "menu", "description": "📋 Открыть главное меню"},
             {"command": "sub", "description": "⭐ Моя подписка и продление"},
             {"command": "accounts", "description": "📱 Подключенные Telegram-аккаунты"},
@@ -264,12 +268,14 @@ class TelegramBotEngine:
                 if res_adm.status_code != 200:
                     logger.warning("Telegram setMyCommands (admin) failed: %s %s", res_adm.status_code, res_adm.text)
 
-            # 3. Configure Chat Menu button (Blue 'Menu' button in Telegram)
+            # 3. Configure Chat Menu button (Frozen Mini App: primary interface is the Telegram Bot itself)
+            menu_btn_payload = {"menu_button": {"type": "commands"}}
+
             await self.client.post(
                 f"{self.base_url}/setChatMenuButton",
-                json={"menu_button": {"type": "commands"}},
+                json=menu_btn_payload,
             )
-            logger.info("Bot commands successfully registered in Telegram API via setMyCommands.")
+            logger.info("Bot commands and Menu Button successfully registered in Telegram API.")
             return True
         except Exception as e:
             logger.warning("Exception in setup_bot_commands: %s", e)
@@ -310,11 +316,12 @@ class TelegramBotEngine:
         text: str,
         reply_markup: Optional[Dict[str, Any]] = None,
         parse_mode: str = "HTML",
+        reply_to_message_id: Optional[int] = None,
     ) -> bool:
         if len(text) > 4000:
             text = text[:3900] + "\n\n<i>[Текст сокращен из-за лимита длины Telegram]</i>"
         url = f"{self.base_url}/sendMessage"
-        payload = {
+        payload: Dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": parse_mode,
@@ -322,15 +329,66 @@ class TelegramBotEngine:
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
+        if reply_to_message_id is not None:
+            from companion.bot.reply_validator import ReplyValidator
+            reply_params = ReplyValidator.build_reply_parameters(reply_to_message_id, is_business_connection=False, chat_id=chat_id)
+            if reply_params:
+                payload["reply_parameters"] = reply_params
+                payload["reply_to_message_id"] = int(reply_to_message_id)
+                payload["allow_sending_without_reply"] = True
         try:
             if not self.client:
                 return False
             res = await self.client.post(url, json=payload)
+            if res.status_code == 200:
+                return True
+            if res.status_code == 400 and "reply_parameters" in payload:
+                logger.warning("Telegram rejected reply_parameters for direct chat %s (%s). Retrying without reply target.", chat_id, res.text)
+                payload.pop("reply_parameters", None)
+                payload.pop("reply_to_message_id", None)
+                payload.pop("allow_sending_without_reply", None)
+                retry_res = await self.client.post(url, json=payload)
+                return retry_res.status_code == 200
             if res.status_code != 200:
                 logger.error("Failed to send message: %s - %s", res.status_code, res.text)
             return res.status_code == 200
         except Exception as e:
             logger.error("Exception in send_message: %s (%s)", type(e).__name__, e)
+            return False
+
+    async def send_sticker(
+        self,
+        chat_id: int,
+        sticker_file_id: str,
+        reply_to_message_id: Optional[int] = None,
+    ) -> bool:
+        if not sticker_file_id or not self.client:
+            return False
+        url = f"{self.base_url}/sendSticker"
+        payload: Dict[str, Any] = {
+            "chat_id": chat_id,
+            "sticker": sticker_file_id,
+        }
+        if reply_to_message_id is not None:
+            from companion.bot.reply_validator import ReplyValidator
+            reply_params = ReplyValidator.build_reply_parameters(reply_to_message_id, is_business_connection=False, chat_id=chat_id)
+            if reply_params:
+                payload["reply_parameters"] = reply_params
+                payload["reply_to_message_id"] = int(reply_to_message_id)
+                payload["allow_sending_without_reply"] = True
+        try:
+            res = await self.client.post(url, json=payload)
+            if res.status_code == 200:
+                return True
+            if res.status_code == 400 and "reply_parameters" in payload:
+                payload.pop("reply_parameters", None)
+                payload.pop("reply_to_message_id", None)
+                payload.pop("allow_sending_without_reply", None)
+                retry_res = await self.client.post(url, json=payload)
+                return retry_res.status_code == 200
+            return res.status_code == 200
+        except Exception as e:
+            logger.error("Exception in send_sticker: %s (%s)", type(e).__name__, e)
             return False
 
     async def edit_message(
@@ -471,8 +529,15 @@ class TelegramBotEngine:
                 username=raw_username,
             )
             session.add(user)
-            await session.commit()
-            await session.refresh(user)
+            try:
+                await session.commit()
+                await session.refresh(user)
+            except Exception:
+                await session.rollback()
+                res = await session.execute(stmt)
+                user = res.scalars().first()
+                if not user:
+                    raise
         elif raw_username and user.username != raw_username:
             user.username = raw_username
             await session.commit()
@@ -839,6 +904,9 @@ class TelegramBotEngine:
         dating_app = getattr(persona, "dating_app_context", "") or "совпали в Дайвинчике пару дней назад, вчера удалила анкету, перешла в тг"
         study_hobbies = getattr(persona, "study_work_hobbies", "") or "учусь на 4 курсе графического дизайна, выставки, кофе и прогулки"
         extra = getattr(persona, "extra_facts", "") or "не люблю банальные свидания в душных кафе, обожаю атмосферные квесты"
+        sleep_start = getattr(persona, "sleep_start", "23:00") or "23:00"
+        sleep_end = getattr(persona, "sleep_end", "08:30") or "08:30"
+        tz_name = getattr(persona, "timezone_name", "Europe/Moscow") or "Europe/Moscow"
         style_val = getattr(persona, "current_style", None) or "adaptive_all"
         style_title = StyleType(style_val).title
 
@@ -855,13 +923,14 @@ class TelegramBotEngine:
             f"Эти данные нейросеть использует в каждом сообщении, чтобы общаться "
             f"строго по вашей индивидуальной легенде:\n\n"
             f"• <b>Имя и возраст:</b> {name}, {age} лет\n"
-            f"• <b>Город и район:</b> {city}, {district}\n"
+            f"• <b>Город и район:</b> {city}, {district} (<code>{tz_name}</code>)\n"
             f"• <b>Откуда родом:</b> {birth_city}\n"
             f"• <b>Почему переехала:</b> <i>{move_reason}</i>\n"
             f"• <b>Сколько уже тут:</b> <i>{years_in_city}</i>\n"
             f"• <b>Контекст дейтинга:</b> <i>{dating_app}</i>\n"
             f"• <b>Учеба / Работа и хобби:</b> <i>{study_hobbies}</i>\n"
             f"• <b>Детали и предпочтения:</b> <i>{extra}</i>\n"
+            f"• <b>Режим сна:</b> 🌙 {sleep_start} – {sleep_end}\n"
             f"• <b>Стиль общения:</b> {style_title}\n\n"
             f"<i>Вы можете отредактировать любой пункт отдельно или нажать кнопку ниже, чтобы нейросеть заполнила всю анкету из одного вашего сообщения!</i>"
         )
@@ -890,10 +959,11 @@ class TelegramBotEngine:
                 {"text": "✨ Детали и предпочтения", "callback_data": f"legend_edit_extra_facts{suffix}"},
             ],
             [
-                {"text": "⚡️ Заполнить легенду одним сообщением (AI)", "callback_data": f"legend_wizard_auto{suffix}"},
+                {"text": "🌙 Режим сна (Часы сна)", "callback_data": f"legend_edit_sleep{suffix}"},
+                {"text": "🎭 Стиль общения", "callback_data": style_cb},
             ],
             [
-                {"text": "🎭 Стиль общения этого аккаунта", "callback_data": style_cb},
+                {"text": "⚡️ Заполнить легенду одним сообщением (AI)", "callback_data": f"legend_wizard_auto{suffix}"},
             ],
         ]
 
@@ -1017,6 +1087,7 @@ class TelegramBotEngine:
             "inline_keyboard": [
                 [
                     {"text": "🎧 Быстрый тест голоса", "callback_data": "voice_benchmark_test"},
+                    {"text": "✍️ Озвучить свой текст", "callback_data": "voice_custom_text"},
                 ],
                 [
                     {"text": "🌸 Скромная (Нежная)", "callback_data": "voice_sample_shy"},
@@ -1037,19 +1108,284 @@ class TelegramBotEngine:
             ]
         }
 
+    @staticmethod
+    def build_cancel_flow_kb(back_callback: str = "menu_main") -> Dict[str, Any]:
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "❌ Отмена ввода", "callback_data": "cancel_input_flow"},
+                    {"text": "◀️ Назад", "callback_data": back_callback},
+                ]
+            ]
+        }
+
+    async def build_chats_crm_payload(
+        self,
+        session: AsyncSession,
+        db_user_id: int,
+        is_admin: bool,
+        filter_key: str = "all",
+        page: int = 1,
+        search_query: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
+        """
+        Builds the Telegram-native Connected Chat Management (CRM) dashboard
+        with status indicators (🟢 Active, 🟡 Waiting, 🔴 Needs attention, ⚪ Paused),
+        filtering, search, and pagination.
+        """
+        contacts = await StatsService.get_chat_leads(session, db_user_id)
+        if not contacts and is_admin:
+            stmt_all = select(Contact).order_by(Contact.last_incoming_at.desc(), Contact.id.desc())
+            res_all = await session.execute(stmt_all)
+            contacts = list(res_all.scalars().all())
+
+        now_utc = datetime.now(timezone.utc)
+        counts = {"all": len(contacts), "active": 0, "waiting": 0, "attention": 0, "paused": 0}
+        classified: List[tuple[Contact, str, str, str]] = []
+        for c in contacts:
+            bucket, icon, lbl = ConversationManagerEngine.classify_contact_status(c, now_utc=now_utc)
+            counts[bucket] = counts.get(bucket, 0) + 1
+            classified.append((c, bucket, icon, lbl))
+
+        # Apply search query if set
+        filtered = classified
+        if search_query:
+            q_low = search_query.lower().strip()
+            filtered = [
+                (c, b, ic, lb)
+                for (c, b, ic, lb) in filtered
+                if q_low in (c.first_name or "").lower()
+                or q_low in (c.username or "").lower()
+                or q_low in str(c.tg_id or "")
+                or q_low in (c.dialogue_topics or "").lower()
+                or q_low in (c.dialogue_summary or "").lower()
+                or q_low in (c.tags or "").lower()
+            ]
+
+        # Apply filter tab
+        if filter_key in ("active", "waiting", "attention", "paused"):
+            filtered = [(c, b, ic, lb) for (c, b, ic, lb) in filtered if b == filter_key]
+        else:
+            filter_key = "all"
+
+        page_size = 8
+        total_items = len(filtered)
+        total_pages = max(1, (total_items + page_size - 1) // page_size)
+        page = max(1, min(page, total_pages))
+        start_idx = (page - 1) * page_size
+        page_items = filtered[start_idx : start_idx + page_size]
+
+        filter_titles = {
+            "all": "Все диалоги",
+            "active": "🟢 Активные",
+            "waiting": "🟡 Ожидают ответа",
+            "attention": "🔴 Требуют внимания",
+            "paused": "⚪ На паузе / Ручной режим",
+        }
+
+        header = (
+            f"💬 <b>ЛИДЫ (ОБЩЕНИЕ И ДИАЛОГИ) | УПРАВЛЕНИЕ ЧАТАМИ (CRM) — {filter_titles.get(filter_key, 'Все')}</b>\n\n"
+            f"📊 <b>Статусы сейчас:</b> "
+            f"🟢 Активных: <b>{counts['active']}</b> | "
+            f"🟡 Ожидают: <b>{counts['waiting']}</b> | "
+            f"🔴 Внимание: <b>{counts['attention']}</b> | "
+            f"⚪ Пауза: <b>{counts['paused']}</b>\n"
+        )
+        if search_query:
+            header += f"🔍 <b>Поиск:</b> «<code>{html.escape(search_query)}</code>» (найдено: {total_items})\n"
+
+        if not page_items:
+            text = (
+                header
+                + "\n📭 <b>В этой категории сейчас нет диалогов.</b>\n"
+                "Выберите другой фильтр ниже или вернитесь ко всем чатам."
+            )
+        else:
+            text = (
+                header
+                + "\n<i>Нажмите на чат для просмотра переписки, памяти ИИ, отправки сообщения или смены режима:</i>"
+            )
+
+        def _tab(key: str, label: str) -> Dict[str, str]:
+            prefix = "• " if filter_key == key else ""
+            suffix = " •" if filter_key == key else ""
+            return {"text": f"{prefix}{label} ({counts.get(key, 0)}){suffix}", "callback_data": f"chats_filter_{key}"}
+
+        kb_rows: List[List[Dict[str, Any]]] = [
+            [_tab("all", "Все"), _tab("attention", "🔴 Внимание")],
+            [_tab("active", "🟢 Актив"), _tab("waiting", "🟡 Ждут"), _tab("paused", "⚪ Пауза")],
+        ]
+
+        search_row = [{"text": "🔍 Поиск по чатам", "callback_data": "chats_search"}]
+        if search_query:
+            search_row.append({"text": "✖️ Сбросить поиск", "callback_data": "chats_clear_search"})
+        kb_rows.append(search_row)
+
+        for c, bucket, icon, state_lbl in page_items:
+            c_name = html.escape(c.first_name or f"User_{c.tg_id}")
+            user_str = f" (@{c.username})" if c.username else ""
+            btn_txt = f"{icon} {c_name}{user_str} — {state_lbl}"
+            kb_rows.append([{"text": btn_txt, "callback_data": f"chat_card_{c.id}"}])
+
+        if total_pages > 1:
+            nav_row = []
+            if page > 1:
+                nav_row.append({"text": "◀️ Пред.", "callback_data": f"chats_page_{filter_key}_{page - 1}"})
+            nav_row.append({"text": f"📄 {page}/{total_pages}", "callback_data": f"chats_filter_{filter_key}"})
+            if page < total_pages:
+                nav_row.append({"text": "След. ▶️", "callback_data": f"chats_page_{filter_key}_{page + 1}"})
+            kb_rows.append(nav_row)
+
+        kb_rows.append([{"text": "◀️ В главное меню", "callback_data": "menu_main"}])
+        return text, {"inline_keyboard": kb_rows}
+
+    def build_contact_card_payload(self, contact: Contact) -> tuple[str, Dict[str, Any]]:
+        c_name = html.escape(contact.first_name or f"User_{contact.tg_id}")
+        user_str = f"@{contact.username}" if contact.username else "нет"
+        first_dt = contact.created_at.strftime("%d.%m.%Y %H:%M") if contact.created_at else "-"
+        last_dt = contact.last_incoming_at.strftime("%d.%m.%Y %H:%M") if contact.last_incoming_at else "-"
+
+        bucket, icon, state_lbl = ConversationManagerEngine.classify_contact_status(contact)
+        if contact.status == ContactStatus.BLOCKED or not contact.ai_active:
+            mode_badge = "⛔️ Заблокирован / ИИ выключен"
+        elif contact.bot_paused:
+            mode_badge = "👤 Ручной режим (ИИ на паузе)"
+        else:
+            mode_badge = "🤖 Авто-режим (ИИ общается)"
+
+        diag_summary = html.escape(contact.dialogue_summary or "Обычная переписка")
+        diag_topics = html.escape(contact.dialogue_topics or "знакомство")
+
+        card_text = (
+            f"💬 <b>КАРТОЧКА КЛИЕНТА (ОБЩЕНИЕ) | КАРТОЧКА КЛИЕНТА (CRM)</b>\n\n"
+            f"👤 <b>Имя:</b> {c_name}\n"
+            f"🔗 <b>Username:</b> {user_str}\n"
+            f"🆔 <b>Telegram ID:</b> <code>{contact.tg_id}</code>\n"
+            f"📅 <b>Первый контакт:</b> {first_dt}\n"
+            f"⏰ <b>Последнее сообщение:</b> {last_dt}\n"
+            f"🚦 <b>Операционный статус:</b> {icon} <b>{state_lbl}</b>\n"
+            f"🎛 <b>Режим управления:</b> {mode_badge}\n"
+            f"🏷 <b>Теги:</b> {contact.tags or '🟢 Активный'}\n\n"
+            f"📈 <b>Активность:</b>\n"
+            f"• Входящих от клиента: <b>{contact.total_messages_in}</b>\n"
+            f"• Ответов нейросети: <b>{contact.total_messages_out}</b>\n"
+            f"• Оскорблений/нарушений: <b>{contact.violation_count or 0}</b>\n\n"
+            f"💡 <b>Темы разговора:</b> {diag_topics}\n"
+            f"📝 <b>Краткое содержание диалога:</b>\n"
+            f"{diag_summary}\n\n"
+            f"<i>Выберите действие:</i>"
+        )
+
+        is_blocked = contact.status == ContactStatus.BLOCKED or not contact.ai_active
+        kb = [
+            [
+                {"text": "💬 Вся переписка", "callback_data": f"chat_history_{contact.id}"},
+                {"text": "🧠 Память ИИ (7 уровней)", "callback_data": f"chat_context_{contact.id}"},
+            ],
+            [
+                {"text": "✉️ Написать от себя", "callback_data": f"chat_manual_reply_{contact.id}"},
+                {"text": "🎙 Послушать войсы", "callback_data": f"chat_voice_list_{contact.id}"},
+            ],
+            [
+                {"text": "🏷 Управление тегами", "callback_data": f"chat_tags_{contact.id}"},
+            ],
+            [
+                {
+                    "text": "🔓 Разблокировать / ИИ" if is_blocked else "⛔️ Заблокировать",
+                    "callback_data": f"chat_toggle_block_{contact.id}",
+                },
+                {
+                    "text": "🤖 Включить Авто-ИИ" if contact.bot_paused else "👤 Перехватить (Пауза ИИ)",
+                    "callback_data": f"chat_toggle_pause_{contact.id}",
+                },
+            ],
+            [
+                {"text": "🗑 Удалить диалог", "callback_data": f"lead_action_delete_{contact.id}"},
+                {"text": "↩️ Назад к списку", "callback_data": "menu_leads_chats"},
+            ],
+        ]
+        return card_text, {"inline_keyboard": kb}
+
+    async def build_contact_context_payload(
+        self, session: AsyncSession, contact: Contact
+    ) -> tuple[str, Dict[str, Any]]:
+        """
+        Renders the 7-Level AI Context & Long-Term Memory inspector inside Telegram,
+        matching the Mini App's /api/v1/contacts/{id}/context view.
+        """
+        conv_sum = await MemoryManager.get_or_create_summary(session, contact.id)
+        memories = await MemoryManager.get_memories(session, contact.id)
+
+        c_name = html.escape(contact.first_name or f"User_{contact.tg_id}")
+        sum_text = html.escape(conv_sum.summary_text or contact.dialogue_summary or "Пока накапливается...")
+        topics_text = html.escape(conv_sum.active_topics or contact.dialogue_topics or "знакомство")
+        unresolved_text = html.escape(conv_sum.unresolved_questions or "нет открытых вопросов")
+        commitments_text = html.escape(conv_sum.commitments or "пока нет конкретных договоренностей")
+
+        mem_lines = []
+        for m in memories[:12]:
+            cat = getattr(m, "category", None) or getattr(m, "fact_type", "fact")
+            k = getattr(m, "key", None) or getattr(m, "fact_key", "info")
+            v = getattr(m, "value", None) or getattr(m, "fact_value", "")
+            mem_lines.append(
+                f"• <b>{html.escape(str(cat))}/{html.escape(str(k))}:</b> {html.escape(str(v))}"
+            )
+        facts_block = "\n".join(mem_lines) if mem_lines else "<i>Долгосрочные факты ещё извлекаются по ходу беседы.</i>"
+        covered_cnt = getattr(conv_sum, "messages_covered_count", 0) or getattr(conv_sum, "messages_summarized_count", 0)
+
+        text = (
+            f"🧠 <b>7-УРОВНЕВАЯ ПАМЯТЬ ИИ: {c_name}</b>\n\n"
+            f"📌 <b>1. Сводка диалога (Rolling Summary):</b>\n{sum_text}\n\n"
+            f"💬 <b>2. Активные темы:</b>\n{topics_text}\n\n"
+            f"❓ <b>3. Незакрытые вопросы собеседника:</b>\n{unresolved_text}\n\n"
+            f"🤝 <b>4. Обещания и договоренности:</b>\n{commitments_text}\n\n"
+            f"🗂 <b>5. Долгосрочные факты о клиенте ({len(memories)}):</b>\n{facts_block}\n\n"
+            f"📈 <b>Обработано сообщений в сводке:</b> {covered_cnt}"
+        )
+
+        kb = [
+            [
+                {"text": "🔄 Обновить сводку", "callback_data": f"chat_context_{contact.id}"},
+                {"text": "🗑 Очистить факты", "callback_data": f"chat_context_clear_{contact.id}"},
+            ],
+            [
+                {"text": "💬 История сообщений", "callback_data": f"chat_history_{contact.id}"},
+                {"text": "↩️ Назад к карточке", "callback_data": f"chat_card_{contact.id}"},
+            ],
+        ]
+        return text, {"inline_keyboard": kb}
+
     # ==========================================
     # Updates Dispatcher
     # ==========================================
     async def handle_update(self, update: Dict[str, Any]):
         try:
-            # 1. Telegram Business Chat Automation update
-            if "business_message" in update or "edited_business_message" in update:
-                msg_data = update.get("business_message") or update.get("edited_business_message")
+            # 1. Telegram Business Chat Automation updates
+            if "business_message" in update:
+                msg_data = update["business_message"]
                 async with async_session_maker() as session:
                     await BusinessChatBot.process_business_message(
                         session=session,
                         message_data=msg_data,
                         bot_token=self.token,
+                    )
+                return
+
+            if "edited_business_message" in update:
+                edit_data = update["edited_business_message"]
+                async with async_session_maker() as session:
+                    await BusinessChatBot.process_edited_business_message(
+                        session=session,
+                        message_data=edit_data,
+                    )
+                return
+
+            if "deleted_business_messages" in update:
+                del_data = update["deleted_business_messages"]
+                async with async_session_maker() as session:
+                    await BusinessChatBot.process_deleted_business_messages(
+                        session=session,
+                        delete_data=del_data,
                     )
                 return
 
@@ -1180,186 +1516,386 @@ class TelegramBotEngine:
         if not text:
             return
 
+        # Check if incoming message is a forwarded or pasted Daivinchik dating profile (Sections 16-20)
+        from companion.services.daivinchik_service import DaivinchikService
+        if DaivinchikService.is_daivinchik_message(message):
+            raw_prof_text = (message.get("text") or message.get("caption") or "").strip()
+            async with async_session_maker() as session:
+                db_user = await self.get_or_create_user(session, user_tg)
+                profile, is_new = await DaivinchikService.process_daivinchik_forward(
+                    session=session,
+                    user_id=db_user.id,
+                    raw_text=raw_prof_text,
+                    style_variant="natural"
+                )
+                card_text = DaivinchikService.format_profile_card(profile)
+                kb = DaivinchikService.build_bio_actions_keyboard(profile.id)
+                await self.send_message(chat_id, card_text, reply_markup=kb, parse_mode="HTML")
+                return
+
         async with async_session_maker() as session:
             db_user = await self.get_or_create_user(session, user_tg)
+            mgr_state = self.manager.get_state(user_id)
+            self.manager.detect_user_style(user_id, text)
+            mgr_state.record_turn("user", text)
 
-            # Check user input state machine for editing legend
+            # Check user input state machine for editing legend / custom voice / manual reply / search
             if user_id in self._user_input_states:
-                state_raw = self._user_input_states.pop(user_id)
-                target_acc_id = None
-                if ":" in state_raw:
-                    state, acc_part = state_raw.split(":", 1)
-                    if acc_part.isdigit():
-                        target_acc_id = int(acc_part)
+                raw_peek = self._user_input_states[user_id]
+                peek_state = raw_peek.split(":", 1)[0] if ":" in raw_peek else raw_peek
+                peek_target = int(raw_peek.split(":", 1)[1]) if (":" in raw_peek and raw_peek.split(":", 1)[1].isdigit()) else None
+
+                # 1) Did the user ask to wait ("подожди", "wait", "секунду")? Keep flow intact!
+                if ConversationManagerEngine.is_wait_intent(text):
+                    wait_msg = self.manager.pick_variation(user_id, ConversationManagerEngine.WAIT_VARIATIONS)
+                    await self.send_message(
+                        chat_id,
+                        wait_msg,
+                        reply_markup=self.build_cancel_flow_kb(mgr_state.current_menu or "menu_main"),
+                        parse_mode="HTML",
+                    )
+                    return
+
+                # 2) Did the user cancel ("отмена", "нет", "стой", "не надо", "nah", "cancel")?
+                if ConversationManagerEngine.is_cancel_intent(text):
+                    self._user_input_states.pop(user_id, None)
+                    mgr_state.clear_flow()
+                    cancel_msg = self.manager.pick_variation(user_id, ConversationManagerEngine.CANCEL_VARIATIONS)
+                    back_cb = f"chat_card_{peek_target}" if peek_state == "WAIT_CONTACT_MANUAL_REPLY" and peek_target else (mgr_state.current_menu or "menu_main")
+                    await self.send_message(
+                        chat_id,
+                        cancel_msg,
+                        reply_markup={"inline_keyboard": [[{"text": "◀️ Вернуться назад", "callback_data": back_cb}], [{"text": "🏠 Главное меню", "callback_data": "menu_main"}]]},
+                        parse_mode="HTML",
+                    )
+                    return
+
+                # 3) Did the user interrupt the input flow with a slash command or a side-question?
+                interruption_type = ConversationManagerEngine.is_navigation_or_question_interruption(text)
+                if text.startswith("/") or interruption_type is not None:
+                    self._user_input_states.pop(user_id, None)
+                    mgr_state.active_flow = raw_peek
+                    mgr_state.flow_target_id = peek_target
+                    mgr_state.pause_flow_for_interruption()
+                    # Fall through to handle the slash command or side-question below,
+                    # and we'll offer a 1-tap button to resume the interrupted flow!
                 else:
-                    state = state_raw
-
-                target_account = None
-                persona = None
-                if target_acc_id:
-                    stmt_acc = select(AccountSession).where(
-                        AccountSession.id == target_acc_id, AccountSession.user_id == db_user.id
-                    )
-                    res_acc = await session.execute(stmt_acc)
-                    target_account = res_acc.scalars().first()
-                    if target_account:
-                        persona = await AccountService.ensure_account_persona(session, target_account)
-
-                if not persona:
-                    stmt_p = select(Persona).where(Persona.user_id == db_user.id).order_by(Persona.id.asc())
-                    res_p = await session.execute(stmt_p)
-                    persona = res_p.scalars().first()
-                    if not persona:
-                        persona = Persona(user_id=db_user.id)
-                        session.add(persona)
-                        await session.commit()
-                        await session.refresh(persona)
-
-                user_accounts = await AccountService.get_user_accounts(session, db_user.id)
-                has_mult = len(user_accounts) > 1
-                acc_id_for_kb = target_account.id if target_account else None
-
-                if state == "WAIT_NAME_AGE":
-                    age_match = re.search(r"\b(1[7-9]|[2-3][0-9]|4[0-5])\b", text)
-                    if age_match:
-                        persona.age = int(age_match.group(1))
-                        clean_name = re.sub(r"\b(1[7-9]|[2-3][0-9]|4[0-5])\b", "", text).replace(",", "").strip()
-                        if clean_name:
-                            persona.name = clean_name.capitalize()
+                    state_raw = self._user_input_states.pop(user_id)
+                    mgr_state.clear_flow()
+                    target_acc_id = None
+                    if ":" in state_raw:
+                        state, acc_part = state_raw.split(":", 1)
+                        if acc_part.isdigit():
+                            target_acc_id = int(acc_part)
                     else:
-                        persona.name = text.strip().capitalize()
-                    await session.commit()
-                    await self.send_message(
-                        chat_id,
-                        f"✅ <b>Имя и возраст сохранены:</b> {persona.name}, {persona.age} лет!\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                        state = state_raw
 
-                elif state == "WAIT_CITY_DISTRICT":
-                    from companion.services.timezone_service import TimezoneService
+                    # Handle non-persona input states first
+                    if state == "WAIT_CUSTOM_VOICE_TEXT":
+                        prepared_phonetic = VoiceService.prepare_text_for_tts(text)
+                        await self.send_message(
+                            chat_id,
+                            f"🎙 <b>Синтезирую голосовое по вашему тексту...</b>\n"
+                            f"📝 <b>Исходный текст:</b> «{html.escape(text)}»\n"
+                            f"🗣 <b>Фонетическая разметка:</b> <i>«{html.escape(prepared_phonetic)}»</i>",
+                            parse_mode="HTML",
+                        )
+                        sent = await VoiceService.send_telegram_voice_note(
+                            bot_token=self.token,
+                            chat_id=chat_id,
+                            text=text,
+                            caption=f"🎙 <b>Озвучка вашего текста:</b>\n<i>«{html.escape(text[:180])}»</i>",
+                        )
+                        kb_after = self.build_voice_test_keyboard()
+                        if not sent:
+                            await self.send_message(
+                                chat_id,
+                                "⚠️ Не удалось отправить аудиофайл в Telegram (проверьте настройки голосового движка).",
+                                reply_markup=kb_after,
+                                parse_mode="HTML",
+                            )
+                        return
 
-                    parts = [p.strip() for p in text.split(",", 1)]
-                    persona.city = parts[0]
-                    if len(parts) > 1:
-                        persona.district = parts[1]
-                    if persona.city:
-                        persona.timezone_name = TimezoneService.resolve_timezone_for_city(persona.city)
-                    await session.commit()
-                    await self.send_message(
-                        chat_id,
-                        f"✅ <b>Город и район сохранены:</b> {persona.city}"
-                        + (f", {persona.district}" if persona.district else "")
-                        + "!\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                    if state == "WAIT_CONTACT_SEARCH":
+                        mgr_state.chat_search_query = text.strip()
+                        mgr_state.chat_page = 1
+                        crm_text, crm_kb = await self.build_chats_crm_payload(
+                            session=session,
+                            db_user_id=db_user.id,
+                            is_admin=is_admin,
+                            filter_key=mgr_state.chat_filter,
+                            page=1,
+                            search_query=mgr_state.chat_search_query,
+                        )
+                        await self.send_message(chat_id, crm_text, reply_markup=crm_kb, parse_mode="HTML")
+                        return
 
-                elif state == "WAIT_BIRTH_CITY":
-                    persona.birth_city = text.strip()
-                    await session.commit()
-                    await self.send_message(
-                        chat_id,
-                        f"✅ <b>Город рождения сохранен:</b> {persona.birth_city}!\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                    if state == "WAIT_CONTACT_MANUAL_REPLY":
+                        contact_id = target_acc_id
+                        stmt_c = select(Contact).where(Contact.id == contact_id)
+                        if not is_admin:
+                            stmt_c = stmt_c.where(Contact.user_id == db_user.id)
+                        contact = (await session.execute(stmt_c)).scalars().first()
+                        if not contact:
+                            await self.send_message(
+                                chat_id,
+                                "🔄 Этот контакт больше не существует в базе. Обновляю список чатов.",
+                                reply_markup={"inline_keyboard": [[{"text": "💬 Открыть чаты", "callback_data": "menu_leads_chats"}]]},
+                                parse_mode="HTML",
+                            )
+                            return
 
-                elif state == "WAIT_MOVE_REASON":
-                    persona.move_reason = text.strip()
-                    await session.commit()
-                    await self.send_message(
-                        chat_id,
-                        f"✅ <b>Причина переезда сохранена:</b> {persona.move_reason}!\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                        await HandoverService.handle_manual_owner_message(
+                            session=session,
+                            contact=contact,
+                            text=text,
+                        )
+                        delivered = False
+                        stmt_a = select(AccountSession).where(
+                            AccountSession.user_id == contact.user_id,
+                            AccountSession.is_active == True,
+                        )
+                        acc = (await session.execute(stmt_a)).scalars().first()
+                        if acc and acc.business_connection_id and contact.tg_id:
+                            delivered = await BusinessChatBot.send_business_message(
+                                bot_token=self.token,
+                                business_connection_id=acc.business_connection_id,
+                                chat_id=contact.tg_id,
+                                text=text,
+                            )
+                        elif contact.tg_id:
+                            delivered = await self.send_message(chat_id=contact.tg_id, text=text)
 
-                elif state == "WAIT_YEARS_IN_CITY":
-                    persona.years_in_city = text.strip()
-                    await session.commit()
-                    await self.send_message(
-                        chat_id,
-                        f"✅ <b>Срок проживания сохранен:</b> {persona.years_in_city}!\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                        mgr_state.last_entity_type = "contact"
+                        mgr_state.last_entity_id = contact.id
+                        c_name = html.escape(contact.first_name or f"User_{contact.tg_id}")
+                        delivery_badge = (
+                            "✅ <b>Сообщение доставлено клиенту в Telegram!</b>"
+                            if delivered
+                            else "💾 <b>Сообщение сохранено в историю диалога</b> (ожидает активного подключения Telegram Business)."
+                        )
+                        await self.send_message(
+                            chat_id,
+                            f"{delivery_badge}\n\n"
+                            f"👤 <b>Кому:</b> {c_name}\n"
+                            f"💬 <b>Текст:</b> «{html.escape(text)}»\n"
+                            f"⏸ <b>Режим:</b> Автоответ ИИ поставлен на паузу на 15 минут (ручной перехват).",
+                            reply_markup={
+                                "inline_keyboard": [
+                                    [
+                                        {"text": "✉️ Написать ещё", "callback_data": f"chat_manual_reply_{contact.id}"},
+                                        {"text": "🤖 Включить ИИ сразу", "callback_data": f"unpause_contact_{contact.id}"},
+                                    ],
+                                    [{"text": "💬 Карточка клиента", "callback_data": f"chat_card_{contact.id}"}],
+                                ]
+                            },
+                            parse_mode="HTML",
+                        )
+                        return
 
-                elif state == "WAIT_DATING_APP":
-                    persona.dating_app_context = text.strip()
-                    await session.commit()
-                    await self.send_message(
-                        chat_id,
-                        "✅ <b>Контекст дейтинга сохранен!</b>\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                    target_account = None
+                    persona = None
+                    if target_acc_id:
+                        stmt_acc = select(AccountSession).where(
+                            AccountSession.id == target_acc_id, AccountSession.user_id == db_user.id
+                        )
+                        res_acc = await session.execute(stmt_acc)
+                        target_account = res_acc.scalars().first()
+                        if target_account:
+                            persona = await AccountService.ensure_account_persona(session, target_account)
 
-                elif state == "WAIT_STUDY_HOBBIES":
-                    persona.study_work_hobbies = text.strip()
-                    await session.commit()
-                    await self.send_message(
-                        chat_id,
-                        "✅ <b>Учеба, работа и хобби сохранены!</b>\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                    if not persona:
+                        stmt_p = select(Persona).where(Persona.user_id == db_user.id).order_by(Persona.id.asc())
+                        res_p = await session.execute(stmt_p)
+                        persona = res_p.scalars().first()
+                        if not persona:
+                            persona = Persona(user_id=db_user.id)
+                            session.add(persona)
+                            await session.commit()
+                            await session.refresh(persona)
 
-                elif state == "WAIT_EXTRA_FACTS":
-                    persona.extra_facts = text.strip()
-                    await session.commit()
-                    await self.send_message(
-                        chat_id,
-                        "✅ <b>Детали и предпочтения сохранены!</b>\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                    mgr_state.last_entity_type = "persona"
+                    mgr_state.last_entity_id = persona.id
 
-                elif state == "WAIT_LEGEND_WIZARD":
-                    from companion.services.ai_service import AIService
-                    from companion.services.timezone_service import TimezoneService
+                    user_accounts = await AccountService.get_user_accounts(session, db_user.id)
+                    has_mult = len(user_accounts) > 1
+                    acc_id_for_kb = target_account.id if target_account else None
 
-                    parsed = await AIService.parse_legend_wizard(text)
-                    persona.name = parsed.get("name") or persona.name
-                    persona.age = parsed.get("age") or persona.age
-                    persona.city = parsed.get("city") or persona.city
-                    persona.district = parsed.get("district") or persona.district
-                    persona.birth_city = parsed.get("birth_city") or getattr(persona, "birth_city", None)
-                    persona.move_reason = parsed.get("move_reason") or getattr(persona, "move_reason", None)
-                    persona.years_in_city = parsed.get("years_in_city") or getattr(persona, "years_in_city", None)
-                    persona.dating_app_context = parsed.get("dating_app_context") or persona.dating_app_context
-                    persona.study_work_hobbies = parsed.get("study_work_hobbies") or persona.study_work_hobbies
-                    persona.extra_facts = parsed.get("extra_facts") or persona.extra_facts
-                    if parsed.get("legend"):
-                        persona.legend = parsed["legend"]
-                    if persona.city:
-                        persona.timezone_name = TimezoneService.resolve_timezone_for_city(persona.city)
-                    await session.commit()
+                    if state == "WAIT_NAME_AGE":
+                        age_match = re.search(r"\b(1[7-9]|[2-3][0-9]|4[0-5])\b", text)
+                        if age_match:
+                            persona.age = int(age_match.group(1))
+                            clean_name = re.sub(r"\b(1[7-9]|[2-3][0-9]|4[0-5])\b", "", text).replace(",", "").strip()
+                            if clean_name:
+                                persona.name = clean_name.capitalize()
+                        else:
+                            persona.name = text.strip().capitalize()
+                        mgr_state.last_edited_field = "name_age"
+                        await session.commit()
+                        await self.send_message(
+                            chat_id,
+                            f"✅ <b>Имя и возраст сохранены:</b> {persona.name}, {persona.age} лет!\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
 
-                    await self.send_message(
-                        chat_id,
-                        "🎉 <b>Анкета девушки успешно заполнена нейросетью!</b>\n\n"
-                        + self.format_legend_card(persona, account=target_account),
-                        reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
-                        parse_mode="HTML",
-                    )
-                    return
+                    elif state == "WAIT_CITY_DISTRICT":
+                        from companion.services.timezone_service import TimezoneService
+
+                        parts = [p.strip() for p in text.split(",", 1)]
+                        persona.city = parts[0]
+                        if len(parts) > 1:
+                            persona.district = parts[1]
+                        if persona.city:
+                            persona.timezone_name = TimezoneService.resolve_timezone_for_city(persona.city)
+                        mgr_state.last_edited_field = "city"
+                        await session.commit()
+                        await self.send_message(
+                            chat_id,
+                            f"✅ <b>Город и район сохранены:</b> {persona.city}"
+                            + (f", {persona.district}" if persona.district else "")
+                            + "!\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
+
+                    elif state == "WAIT_BIRTH_CITY":
+                        persona.birth_city = text.strip()
+                        mgr_state.last_edited_field = "birth_city"
+                        await session.commit()
+                        await self.send_message(
+                            chat_id,
+                            f"✅ <b>Город рождения сохранен:</b> {persona.birth_city}!\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
+
+                    elif state == "WAIT_MOVE_REASON":
+                        persona.move_reason = text.strip()
+                        mgr_state.last_edited_field = "move_reason"
+                        await session.commit()
+                        await self.send_message(
+                            chat_id,
+                            f"✅ <b>Причина переезда сохранена:</b> {persona.move_reason}!\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
+
+                    elif state == "WAIT_YEARS_IN_CITY":
+                        persona.years_in_city = text.strip()
+                        mgr_state.last_edited_field = "years_in_city"
+                        await session.commit()
+                        await self.send_message(
+                            chat_id,
+                            f"✅ <b>Срок проживания сохранен:</b> {persona.years_in_city}!\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
+
+                    elif state == "WAIT_DATING_APP":
+                        persona.dating_app_context = text.strip()
+                        mgr_state.last_edited_field = "dating_app"
+                        await session.commit()
+                        await self.send_message(
+                            chat_id,
+                            "✅ <b>Контекст дейтинга сохранен!</b>\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
+
+                    elif state == "WAIT_STUDY_HOBBIES":
+                        persona.study_work_hobbies = text.strip()
+                        mgr_state.last_edited_field = "study_hobbies"
+                        await session.commit()
+                        await self.send_message(
+                            chat_id,
+                            "✅ <b>Учеба, работа и хобби сохранены!</b>\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
+
+                    elif state == "WAIT_EXTRA_FACTS":
+                        persona.extra_facts = text.strip()
+                        mgr_state.last_edited_field = "extra_facts"
+                        await session.commit()
+                        await self.send_message(
+                            chat_id,
+                            "✅ <b>Детали и предпочтения сохранены!</b>\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
+
+                    elif state == "WAIT_SLEEP_SCHEDULE":
+                        times = re.findall(r"\b([0-2]?\d:[0-5]\d)\b", text)
+                        if len(times) >= 2:
+                            persona.sleep_start = times[0].zfill(5)
+                            persona.sleep_end = times[1].zfill(5)
+                            mgr_state.last_edited_field = "sleep_schedule"
+                            await session.commit()
+                            await self.send_message(
+                                chat_id,
+                                f"✅ <b>Режим сна сохранен:</b> 🌙 {persona.sleep_start} – {persona.sleep_end}!\n\n"
+                                + self.format_legend_card(persona, account=target_account),
+                                reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                                parse_mode="HTML",
+                            )
+                        else:
+                            # Keep user in WAIT_SLEEP_SCHEDULE and ask concisely for HH:MM - HH:MM
+                            self._user_input_states[user_id] = state_raw
+                            await self.send_message(
+                                chat_id,
+                                "Укажи время отбоя и подъема в формате <code>23:00 - 08:30</code> (два времени через тире или пробел).",
+                                reply_markup=self.build_cancel_flow_kb("menu_legend"),
+                                parse_mode="HTML",
+                            )
+                        return
+
+                    elif state == "WAIT_LEGEND_WIZARD":
+                        from companion.services.ai_service import AIService
+                        from companion.services.timezone_service import TimezoneService
+
+                        parsed = await AIService.parse_legend_wizard(text)
+                        persona.name = parsed.get("name") or persona.name
+                        persona.age = parsed.get("age") or persona.age
+                        persona.city = parsed.get("city") or persona.city
+                        persona.district = parsed.get("district") or persona.district
+                        persona.birth_city = parsed.get("birth_city") or getattr(persona, "birth_city", None)
+                        persona.move_reason = parsed.get("move_reason") or getattr(persona, "move_reason", None)
+                        persona.years_in_city = parsed.get("years_in_city") or getattr(persona, "years_in_city", None)
+                        persona.dating_app_context = parsed.get("dating_app_context") or persona.dating_app_context
+                        persona.study_work_hobbies = parsed.get("study_work_hobbies") or persona.study_work_hobbies
+                        persona.extra_facts = parsed.get("extra_facts") or persona.extra_facts
+                        if parsed.get("legend"):
+                            persona.legend = parsed["legend"]
+                        if persona.city:
+                            persona.timezone_name = TimezoneService.resolve_timezone_for_city(persona.city)
+                        mgr_state.last_edited_field = "name_age"
+                        await session.commit()
+
+                        await self.send_message(
+                            chat_id,
+                            "🎉 <b>Анкета девушки успешно заполнена нейросетью!</b>\n\n"
+                            + self.format_legend_card(persona, account=target_account),
+                            reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
+                            parse_mode="HTML",
+                        )
+                        return
 
             # 0. Benchmark Voice Test (/test_voice or phrase 'тест гс')
             low_text = text.lower().strip()
@@ -1661,6 +2197,38 @@ class TelegramBotEngine:
                 )
                 return
 
+            if text in ("/app", "/miniapp", "/webapp"):
+                if settings.WEBAPP_URL and settings.WEBAPP_URL.startswith("https://"):
+                    kb = {
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "🚀 Открыть Панель управления (Mini App)",
+                                    "web_app": {"url": settings.WEBAPP_URL},
+                                }
+                            ],
+                            [{"text": "◀️ В главное меню", "callback_data": "menu_main"}],
+                        ]
+                    }
+                    await self.send_message(
+                        chat_id,
+                        "📱 <b>TELEGRAM MINI APP — ПАНЕЛЬ УПРАВЛЕНИЯ</b>\n\n"
+                        "Нажмите кнопку ниже, чтобы открыть полноценное приложение управления:\n"
+                        "• Живая статистика и воронка свиданий\n"
+                        "• CRM диалогов и 7-уровневая память ИИ\n"
+                        "• Конструктор легенды и AI-визард\n"
+                        "• Управление аккаунтами, войсами и подпиской",
+                        reply_markup=kb,
+                        parse_mode="HTML",
+                    )
+                else:
+                    await self.send_message(
+                        chat_id,
+                        "⚠️ Для открытия Mini App внутри Telegram требуется HTTPS-адрес в <code>WEBAPP_URL</code>.",
+                        parse_mode="HTML",
+                    )
+                return
+
             if text in ("/sub", "/status", "/subscription"):
                 sub = await SubscriptionService.get_active_subscription(session, db_user.id)
                 sub_info = SubscriptionService.get_detailed_status(sub)
@@ -1897,11 +2465,231 @@ class TelegramBotEngine:
                 await self.send_message(chat_id, overview_text, reply_markup=kb, parse_mode="HTML")
                 return
 
+            # 4b. Human-Like Manager Conversational Layer (Context-Aware Operations Manager)
+            def _attach_resume_if_interrupted(
+                reply_str: str, markup: Optional[Dict[str, Any]]
+            ) -> tuple[str, Optional[Dict[str, Any]]]:
+                if not mgr_state.interrupted_flow:
+                    return reply_str, markup
+                raw_f = mgr_state.interrupted_flow
+                base_f = raw_f.split(":", 1)[0] if ":" in raw_f else raw_f
+                label_f = FLOW_LABELS.get(base_f, "предыдущий шаг")
+                note = f"\n\n💡 <i>Кстати, мы остановились на вводе: <b>{label_f}</b>. Продолжим?</i>"
+                rows = list(markup.get("inline_keyboard", [])) if markup else []
+                rows.insert(
+                    0,
+                    [
+                        {"text": "▶️ Продолжить ввод", "callback_data": "resume_interrupted_flow"},
+                        {"text": "✖️ Забыть ввод", "callback_data": "cancel_input_flow"},
+                    ],
+                )
+                return reply_str + note, {"inline_keyboard": rows}
+
+            # (i) Pending Confirmation resolution via conversational "да" / "нет"
+            if mgr_state.pending_confirmation:
+                if ConversationManagerEngine.is_confirm_intent(text):
+                    pending = mgr_state.pending_confirmation
+                    mgr_state.pending_confirmation = None
+                    act = pending.get("action")
+                    t_id = pending.get("target_id")
+                    if act == "delete_contact" and t_id:
+                        stmt_c = select(Contact).where(Contact.id == t_id)
+                        if not is_admin:
+                            stmt_c = stmt_c.where(Contact.user_id == db_user.id)
+                        contact = (await session.execute(stmt_c)).scalars().first()
+                        if contact:
+                            c_name = html.escape(contact.first_name or f"User_{contact.tg_id}")
+                            await session.delete(contact)
+                            await session.commit()
+                            await self.send_message(
+                                chat_id,
+                                f"Готово — удалил карточку и переписку с <b>{c_name}</b>.",
+                                reply_markup={"inline_keyboard": [[{"text": "💬 К списку чатов", "callback_data": "menu_leads_chats"}]]},
+                                parse_mode="HTML",
+                            )
+                            return
+                    elif act == "cancel_sub":
+                        await SubscriptionService.cancel_subscription(session, db_user.id)
+                        await self.send_message(
+                            chat_id,
+                            "Подписка отменена, автоответы остановлены. Когда понадобится снова — можно включить в разделе оплаты.",
+                            reply_markup={"inline_keyboard": [[{"text": "💳 Тарифы", "callback_data": "menu_buy_sub"}], [{"text": "🏠 Главное меню", "callback_data": "menu_main"}]]},
+                            parse_mode="HTML",
+                        )
+                        return
+                elif ConversationManagerEngine.is_cancel_intent(text):
+                    mgr_state.pending_confirmation = None
+                    await self.send_message(
+                        chat_id,
+                        self.manager.pick_variation(user_id, ConversationManagerEngine.CANCEL_VARIATIONS),
+                        reply_markup=self.build_main_menu_keyboard(is_admin),
+                        parse_mode="HTML",
+                    )
+                    return
+
+            # (ii) Resume interrupted flow when user says "да" / "продолжим" / "yes"
+            if mgr_state.interrupted_flow and ConversationManagerEngine.is_confirm_intent(text):
+                resumed_raw, _ = mgr_state.resume_interrupted()
+                if resumed_raw:
+                    self._user_input_states[user_id] = resumed_raw
+                    base_f = resumed_raw.split(":", 1)[0] if ":" in resumed_raw else resumed_raw
+                    lbl = FLOW_LABELS.get(base_f, "нужные данные")
+                    await self.send_message(
+                        chat_id,
+                        f"Возвращаемся к настройке — отправь <b>{lbl}</b>:",
+                        reply_markup=self.build_cancel_flow_kb(mgr_state.current_menu or "menu_main"),
+                        parse_mode="HTML",
+                    )
+                    return
+
+            # (iii) Contextual Correction ("make it 23 instead", "давай лучше Казань", "поменяй на 14")
+            corr_val = ConversationManagerEngine.extract_correction_value(text)
+            if corr_val:
+                corr_res = await self.manager.apply_contextual_correction(
+                    session=session,
+                    user_id=user_id,
+                    db_user_id=db_user.id,
+                    new_value=corr_val,
+                )
+                if corr_res:
+                    msg_c, kb_c = _attach_resume_if_interrupted(corr_res[0], corr_res[1])
+                    await self.send_message(chat_id, msg_c, reply_markup=kb_c, parse_mode="HTML")
+                    return
+
+            # (iv) "Check the latest one" / "покажи последнего" / "кто последний писал"
+            if ConversationManagerEngine.is_latest_contact_intent(text):
+                contacts = await StatsService.get_chat_leads(session, db_user.id)
+                if not contacts and is_admin:
+                    stmt_all = select(Contact).order_by(Contact.last_incoming_at.desc(), Contact.id.desc())
+                    contacts = list((await session.execute(stmt_all)).scalars().all())
+                if not contacts:
+                    msg_l, kb_l = _attach_resume_if_interrupted(
+                        "Сейчас в базе пока нет ни одного начатого диалога. Как только напишет первый клиент — он сразу появится здесь.",
+                        {"inline_keyboard": [[{"text": "📱 Мои аккаунты", "callback_data": "menu_accounts"}], [{"text": "🏠 Главное меню", "callback_data": "menu_main"}]]},
+                    )
+                    await self.send_message(chat_id, msg_l, reply_markup=kb_l, parse_mode="HTML")
+                    return
+                latest_c = contacts[0]
+                mgr_state.last_entity_type = "contact"
+                mgr_state.last_entity_id = latest_c.id
+                card_txt, card_kb = self.build_contact_card_payload(latest_c)
+                msg_l, kb_l = _attach_resume_if_interrupted(
+                    f"Вот последний активный диалог:\n\n{card_txt}",
+                    card_kb,
+                )
+                await self.send_message(chat_id, msg_l, reply_markup=kb_l, parse_mode="HTML")
+                return
+
+            # (v) Frustrated / Troubleshooting ("почему опять не работает", "бот молчит", "сломалось")
+            if mgr_state.user_style == "frustrated" or ConversationManagerEngine.is_navigation_or_question_interruption(text) == "frustrated":
+                has_key = bool(settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY"))
+                diag_txt, diag_kb = await self.manager.build_system_diagnostics_reply(
+                    session=session,
+                    db_user_id=db_user.id,
+                    is_admin=is_admin,
+                    has_ai_key=has_key,
+                )
+                msg_d, kb_d = _attach_resume_if_interrupted(diag_txt, diag_kb)
+                await self.send_message(chat_id, msg_d, reply_markup=kb_d, parse_mode="HTML")
+                return
+
+            # (vi) Natural Manager Navigation without slash commands ("статистика", "чаты", "подписка", "мои аккаунты")
+            nav_intent = ConversationManagerEngine.is_navigation_or_question_interruption(text)
+            if nav_intent == "stats":
+                stats = await StatsService.get_overview(session, db_user.id)
+                report = AdminNotifier.format_stats_report(stats)
+                kb_s = {
+                    "inline_keyboard": [
+                        [{"text": "📊 Детальная статистика и CSV", "callback_data": "menu_leads_stats_today"}],
+                        [{"text": "🔥 Список горячих лидов", "callback_data": "menu_leads"}],
+                        [{"text": "◀️ В главное меню", "callback_data": "menu_main"}],
+                    ]
+                }
+                msg_s, kb_s = _attach_resume_if_interrupted(report, kb_s)
+                await self.send_message(chat_id, msg_s, reply_markup=kb_s, parse_mode="HTML")
+                return
+            elif nav_intent == "chats":
+                crm_txt, crm_kb = await self.build_chats_crm_payload(
+                    session=session,
+                    db_user_id=db_user.id,
+                    is_admin=is_admin,
+                    filter_key=mgr_state.chat_filter,
+                    page=1,
+                    search_query=mgr_state.chat_search_query,
+                )
+                msg_c, kb_c = _attach_resume_if_interrupted(crm_txt, crm_kb)
+                await self.send_message(chat_id, msg_c, reply_markup=kb_c, parse_mode="HTML")
+                return
+            elif nav_intent == "sub":
+                sub = await SubscriptionService.get_active_subscription(session, db_user.id)
+                sub_info = SubscriptionService.get_detailed_status(sub)
+                if sub_info["is_active"]:
+                    sub_txt = (
+                        f"Подписка активна: <b>{sub_info['plan_name']}</b> (осталось <b>{sub_info['remaining_str']}</b>, "
+                        f"до <code>{sub_info['expires_at_str']}</code> МСК). Лимит: до {sub_info['max_accounts']} акк."
+                    )
+                else:
+                    sub_txt = "Сейчас активной подписки нет. Можно подключить тариф ниже:"
+                msg_sub, kb_sub = _attach_resume_if_interrupted(
+                    sub_txt, self.build_my_sub_keyboard(sub_info["is_active"])
+                )
+                await self.send_message(chat_id, msg_sub, reply_markup=kb_sub, parse_mode="HTML")
+                return
+            elif nav_intent == "accounts":
+                accounts = await AccountService.get_user_accounts(session, db_user.id)
+                personas = {a.id: await AccountService.ensure_account_persona(session, a) for a in accounts}
+                acc_txt = (
+                    f"Подключено аккаунтов: <b>{len(accounts)}</b>. Выбери аккаунт для настройки:"
+                    if accounts
+                    else "Пока нет подключенных аккаунтов Telegram Business. Создай ссылку ниже:"
+                )
+                acc_kb = (
+                    self.build_accounts_keyboard(accounts, personas)
+                    if accounts
+                    else {"inline_keyboard": [[{"text": "➕ Подключить аккаунт", "callback_data": "menu_invites"}], [{"text": "◀️ В меню", "callback_data": "menu_main"}]]}
+                )
+                msg_a, kb_a = _attach_resume_if_interrupted(acc_txt, acc_kb)
+                await self.send_message(chat_id, msg_a, reply_markup=kb_a, parse_mode="HTML")
+                return
+            elif nav_intent == "menu":
+                sub = await SubscriptionService.get_active_subscription(session, db_user.id)
+                sub_info = SubscriptionService.get_detailed_status(sub)
+                msg_m, kb_m = _attach_resume_if_interrupted(
+                    self.format_main_menu_text(is_admin, sub_info),
+                    self.build_main_menu_keyboard(is_admin),
+                )
+                await self.send_message(chat_id, msg_m, reply_markup=kb_m, parse_mode="HTML")
+                return
+
+            # (vii) Concise Manager Responses for short acknowledgments ("спасибо", "wait", "отмена")
+            if ConversationManagerEngine.is_thanks_intent(text):
+                reply_thx = self.manager.pick_variation(user_id, ConversationManagerEngine.THANKS_VARIATIONS)
+                msg_t, kb_t = _attach_resume_if_interrupted(reply_thx, None)
+                await self.send_message(chat_id, msg_t, reply_markup=kb_t, parse_mode="HTML")
+                return
+            if ConversationManagerEngine.is_wait_intent(text):
+                reply_w = self.manager.pick_variation(user_id, ConversationManagerEngine.WAIT_VARIATIONS)
+                msg_w, kb_w = _attach_resume_if_interrupted(reply_w, None)
+                await self.send_message(chat_id, msg_w, reply_markup=kb_w, parse_mode="HTML")
+                return
+            if ConversationManagerEngine.is_cancel_intent(text):
+                mgr_state.clear_flow()
+                mgr_state.interrupted_flow = None
+                reply_c = self.manager.pick_variation(user_id, ConversationManagerEngine.CANCEL_VARIATIONS)
+                await self.send_message(
+                    chat_id,
+                    reply_c,
+                    reply_markup=self.build_main_menu_keyboard(is_admin),
+                    parse_mode="HTML",
+                )
+                return
+
             # 5. Direct companion conversational mode in @YourHelperW_bot
             v_data = message.get("voice") or message.get("audio") or message.get("video_note")
             v_file_id = v_data.get("file_id") if v_data else None
             is_incoming_voice = bool(v_data)
             voice_duration = v_data.get("duration", 0) if v_data else 0
+            msg_id = message.get("message_id")
 
             res = await UserbotHandler.process_incoming_message(
                 session=session,
@@ -1915,10 +2703,18 @@ class TelegramBotEngine:
                 is_voice=is_incoming_voice,
                 voice_duration=voice_duration,
                 voice_file_id=v_file_id,
+                telegram_message_id=msg_id,
             )
             action = res.get("action")
             reply_text = res.get("reply_text")
             voice_tag = res.get("voice_tag")
+            response_plan = res.get("response_plan") or {}
+            planned_messages = response_plan.get("messages") or [
+                {"text": b.strip(), "reply_to_message_id": None}
+                for b in (reply_text or "").split("||")
+                if b.strip()
+            ]
+            planned_sticker = response_plan.get("sticker")
 
             if res.get("detected_violation"):
                 contact = res.get("contact")
@@ -1949,25 +2745,44 @@ class TelegramBotEngine:
                 return
 
             if reply_text:
-                if self.client:
-                    await self.client.post(f"{self.base_url}/sendChatAction", json={"chat_id": chat_id, "action": "typing"})
-                await asyncio.sleep(min(2.5, max(0.8, len(reply_text) * 0.02)))
-
+                from companion.services.typing_simulator import TypingSimulator
                 is_incoming_voice = bool("voice" in message or "audio" in message or "video_note" in message)
                 if voice_tag or VoiceService.should_send_voice(user_message=text, bot_reply=reply_text, is_incoming_voice=is_incoming_voice):
+                    if self.client:
+                        await self.client.post(f"{self.base_url}/sendChatAction", json={"chat_id": chat_id, "action": "record_voice"})
+                    await asyncio.sleep(random.uniform(1.2, 2.0))
                     clean_v = reply_text.replace("||", " ")
                     v_text = VoiceService.shorten_for_voice(clean_v, max_chars=180)
                     sent = await VoiceService.send_telegram_voice_note(
                         bot_token=self.token, chat_id=chat_id, text=v_text, voice_tag=voice_tag
                     )
                     if not sent:
-                        bubbles = [b.strip() for b in reply_text.split("||") if b.strip()]
-                        for b in bubbles:
-                            await self.send_message(chat_id, b)
+                        for msg_item in planned_messages:
+                            bubble = msg_item["text"]
+                            if self.client:
+                                await self.client.post(f"{self.base_url}/sendChatAction", json={"chat_id": chat_id, "action": "typing"})
+                            typing_dur = TypingSimulator.calculate_typing_duration(bubble)
+                            await asyncio.sleep(typing_dur)
+                            await self.send_message(
+                                chat_id,
+                                bubble,
+                                reply_to_message_id=msg_item.get("reply_to_message_id"),
+                            )
                 else:
-                    bubbles = [b.strip() for b in reply_text.split("||") if b.strip()]
-                    for b in bubbles:
-                        await self.send_message(chat_id, b)
+                    for msg_item in planned_messages:
+                        bubble = msg_item["text"]
+                        if self.client:
+                            await self.client.post(f"{self.base_url}/sendChatAction", json={"chat_id": chat_id, "action": "typing"})
+                        typing_dur = TypingSimulator.calculate_typing_duration(bubble)
+                        await asyncio.sleep(typing_dur)
+                        await self.send_message(
+                            chat_id,
+                            bubble,
+                            reply_to_message_id=msg_item.get("reply_to_message_id"),
+                        )
+                    if planned_sticker and planned_sticker.get("file_id"):
+                        await asyncio.sleep(0.4)
+                        await self.send_sticker(chat_id, planned_sticker["file_id"])
                 return
 
     async def handle_callback(self, cq: Dict[str, Any]):
@@ -1983,11 +2798,107 @@ class TelegramBotEngine:
         async with async_session_maker() as session:
             db_user = await self.get_or_create_user(session, from_user)
             db_user_id = db_user.id
+            mgr_state = self.manager.get_state(user_tg_id)
+
+            if data == "cancel_input_flow":
+                self._user_input_states.pop(user_tg_id, None)
+                mgr_state.clear_flow()
+                mgr_state.interrupted_flow = None
+                mgr_state.pending_confirmation = None
+                await self.answer_callback_query(cq_id, "Ок, ввод отменен")
+                sub = await SubscriptionService.get_active_subscription(session, db_user_id)
+                sub_info = SubscriptionService.get_detailed_status(sub)
+                text = self.format_main_menu_text(is_admin, sub_info)
+                await self.edit_message(
+                    chat_id, msg_id, text, reply_markup=self.build_main_menu_keyboard(is_admin), parse_mode="HTML"
+                )
+                return
+
+            if data == "resume_interrupted_flow":
+                resumed_raw, _ = mgr_state.resume_interrupted()
+                await self.answer_callback_query(cq_id, "▶️ Продолжаем ввод")
+                if resumed_raw:
+                    self._user_input_states[user_tg_id] = resumed_raw
+                    base_f = resumed_raw.split(":", 1)[0] if ":" in resumed_raw else resumed_raw
+                    lbl = FLOW_LABELS.get(base_f, "нужные данные")
+                    await self.send_message(
+                        chat_id,
+                        f"Продолжаем настройку — отправь <b>{lbl}</b>:",
+                        reply_markup=self.build_cancel_flow_kb(mgr_state.current_menu or "menu_main"),
+                        parse_mode="HTML",
+                    )
+                return
+
+            # ------------------------------------------
+            # Daivinchik Dating Profile Bio Generation (Sections 16-20)
+            # ------------------------------------------
+            if data.startswith("daiv_"):
+                import hashlib
+                import json
+                from companion.services.daivinchik_service import DaivinchikService
+                from companion.models import DaivinchikProfile
+                parts = data.split("_")
+                action = parts[1]
+
+                if action == "regen" and len(parts) >= 3:
+                    prof_id = int(parts[2])
+                    stmt = select(DaivinchikProfile).where(DaivinchikProfile.id == prof_id)
+                    prof = (await session.execute(stmt)).scalars().first()
+                    if prof:
+                        facts = json.loads(prof.facts_json or "{}")
+                        new_seed = hashlib.md5(f"{prof.profile_hash}_{random.random()}".encode("utf-8")).hexdigest()
+                        synth = DaivinchikService.generate_consistent_persona_details(facts, new_seed)
+                        prof.generated_details_json = json.dumps(synth, ensure_ascii=False)
+                        prof.current_bio = DaivinchikService.generate_bio(facts, synth, style_variant=prof.style_variant)
+                        await session.commit()
+                        await self.answer_callback_query(cq_id, "🔄 Анкета обновлена!")
+                        card_text = DaivinchikService.format_profile_card(prof)
+                        kb = DaivinchikService.build_bio_actions_keyboard(prof.id)
+                        await self.edit_message(chat_id, msg_id, card_text, reply_markup=kb, parse_mode="HTML")
+                    else:
+                        await self.answer_callback_query(cq_id, "⚠️ Анкета не найдена", show_alert=True)
+                    return
+
+                elif action == "style" and len(parts) >= 4:
+                    prof_id = int(parts[2])
+                    new_style = parts[3]
+                    stmt = select(DaivinchikProfile).where(DaivinchikProfile.id == prof_id)
+                    prof = (await session.execute(stmt)).scalars().first()
+                    if prof:
+                        facts = json.loads(prof.facts_json or "{}")
+                        synth = json.loads(prof.generated_details_json or "{}")
+                        prof.current_bio = DaivinchikService.generate_bio(facts, synth, style_variant=new_style)
+                        prof.style_variant = new_style
+                        await session.commit()
+                        style_names = {"natural": "Естественный", "short": "Короткий", "playful": "Игривый", "serious": "Серьезный"}
+                        await self.answer_callback_query(cq_id, f"✅ Стиль: {style_names.get(new_style, new_style)}")
+                        card_text = DaivinchikService.format_profile_card(prof)
+                        kb = DaivinchikService.build_bio_actions_keyboard(prof.id)
+                        await self.edit_message(chat_id, msg_id, card_text, reply_markup=kb, parse_mode="HTML")
+                    else:
+                        await self.answer_callback_query(cq_id, "⚠️ Анкета не найдена", show_alert=True)
+                    return
+
+                elif action == "copy" and len(parts) >= 3:
+                    prof_id = int(parts[2])
+                    stmt = select(DaivinchikProfile).where(DaivinchikProfile.id == prof_id)
+                    prof = (await session.execute(stmt)).scalars().first()
+                    if prof:
+                        await self.answer_callback_query(cq_id, "📋 Текст отправлен сообщением ниже")
+                        await self.send_message(
+                            chat_id,
+                            f"📋 <b>Текст анкеты для копирования в Дайвинчик:</b>\n\n<code>{prof.current_bio}</code>",
+                            parse_mode="HTML"
+                        )
+                    else:
+                        await self.answer_callback_query(cq_id, "⚠️ Анкета не найдена", show_alert=True)
+                    return
 
             # ------------------------------------------
             # Main Menu
             # ------------------------------------------
             if data == "menu_main":
+                mgr_state.set_menu("menu_main")
                 await self.answer_callback_query(cq_id)
                 sub = await SubscriptionService.get_active_subscription(session, db_user_id)
                 sub_info = SubscriptionService.get_detailed_status(sub)
@@ -2000,6 +2911,7 @@ class TelegramBotEngine:
             # My Subscription Center
             # ------------------------------------------
             elif data == "menu_my_sub":
+                mgr_state.set_menu("menu_my_sub")
                 await self.answer_callback_query(cq_id)
                 sub = await SubscriptionService.get_active_subscription(session, db_user_id)
                 sub_info = SubscriptionService.get_detailed_status(sub)
@@ -2026,6 +2938,7 @@ class TelegramBotEngine:
                 )
 
             elif data == "confirm_cancel_sub":
+                mgr_state.pending_confirmation = {"action": "cancel_sub", "target_id": db_user_id}
                 await self.answer_callback_query(cq_id)
                 text = (
                     "⚠️ <b>ВЫ УВЕРЕНЫ, ЧТО ХОТИТЕ ОТМЕНИТЬ ПОДПИСКУ?</b>\n\n"
@@ -2418,6 +3331,7 @@ class TelegramBotEngine:
                         )
 
             elif data.startswith("legend_edit_name_age"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_edit_name_age", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_NAME_AGE:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_NAME_AGE"
                 await self.answer_callback_query(cq_id)
@@ -2425,9 +3339,10 @@ class TelegramBotEngine:
                     "✏️ <b>Введите имя и возраст девушки:</b>\n\n"
                     "Например: <code>Алина, 21</code> или <code>Вика 20</code>"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("legend_edit_city_district"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_edit_city_district", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_CITY_DISTRICT:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_CITY_DISTRICT"
                 await self.answer_callback_query(cq_id)
@@ -2435,9 +3350,10 @@ class TelegramBotEngine:
                     "📍 <b>Введите город и район проживания девушки:</b>\n\n"
                     "Например: <code>Москва, ЦАО / Хамовники</code> или <code>Санкт-Петербург, Петроградка</code>"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("legend_edit_birth_city"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_edit_birth_city", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_BIRTH_CITY:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_BIRTH_CITY"
                 await self.answer_callback_query(cq_id)
@@ -2445,9 +3361,10 @@ class TelegramBotEngine:
                     "🏠 <b>Введите город или регион, откуда девушка родом:</b>\n\n"
                     "Например: <code>Самара</code>, <code>Казань</code>, <code>Краснодар</code>"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("legend_edit_move_reason"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_edit_move_reason", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_MOVE_REASON:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_MOVE_REASON"
                 await self.answer_callback_query(cq_id)
@@ -2456,9 +3373,10 @@ class TelegramBotEngine:
                     "Например:\n"
                     "<code>Поступила в университет на дизайн и осталась жить</code>"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("legend_edit_years_in_city"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_edit_years_in_city", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_YEARS_IN_CITY:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_YEARS_IN_CITY"
                 await self.answer_callback_query(cq_id)
@@ -2467,9 +3385,10 @@ class TelegramBotEngine:
                     "Например:\n"
                     "<code>Живу тут около 4 лет</code> или <code>Уже третий год</code>"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("legend_edit_dating_app"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_edit_dating_app", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_DATING_APP:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_DATING_APP"
                 await self.answer_callback_query(cq_id)
@@ -2478,9 +3397,10 @@ class TelegramBotEngine:
                     "Например:\n"
                     "<code>совпали в Дайвинчике пару дней назад, ты мне сразу понравился, вчера удалила анкету потому что надоело</code>"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("legend_edit_study_hobbies"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_edit_study_hobbies", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_STUDY_HOBBIES:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_STUDY_HOBBIES"
                 await self.answer_callback_query(cq_id)
@@ -2489,9 +3409,10 @@ class TelegramBotEngine:
                     "Например:\n"
                     "<code>учусь на 4 курсе графического дизайна, беру заказы на фрилансе, обожаю выставки, винтаж, кофе и долгие прогулки</code>"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("legend_edit_extra_facts"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_edit_extra_facts", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_EXTRA_FACTS:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_EXTRA_FACTS"
                 await self.answer_callback_query(cq_id)
@@ -2500,9 +3421,22 @@ class TelegramBotEngine:
                     "Например:\n"
                     "<code>живу одна с котиком, не люблю банальные свидания в душных кафе, обожаю разгадывать загадки и мечтаю сходить на атмосферный квест</code>"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
+
+            elif data.startswith("legend_edit_sleep"):
+                mgr_state.set_menu("menu_legend")
+                raw_code = data.replace("legend_edit_sleep", "").lstrip("_")
+                self._user_input_states[user_tg_id] = f"WAIT_SLEEP_SCHEDULE:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_SLEEP_SCHEDULE"
+                await self.answer_callback_query(cq_id)
+                text = (
+                    "🌙 <b>Введите часы сна девушки (по её местному времени):</b>\n\n"
+                    "Например: <code>23:00 - 08:30</code> или <code>00:30 - 09:30</code>\n\n"
+                    "<i>В эти часы бот не отвечает мгновенно ночью, а откладывает сообщение до утреннего пробуждения.</i>"
+                )
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("legend_wizard_auto"):
+                mgr_state.set_menu("menu_legend")
                 raw_code = data.replace("legend_wizard_auto", "").lstrip("_")
                 self._user_input_states[user_tg_id] = f"WAIT_LEGEND_WIZARD:{raw_code}" if (raw_code and raw_code != "default") else "WAIT_LEGEND_WIZARD"
                 await self.answer_callback_query(cq_id)
@@ -2512,7 +3446,7 @@ class TelegramBotEngine:
                     "<i>«меня зовут Настя, 22 года, Питер Васька, учусь на медсестру, люблю рок и кофе, не люблю душные кафе, хочу на квест»</i>\n\n"
                     "Нейросеть сама всё поймет, распарсит и обновит анкету вашей девушки!"
                 )
-                await self.send_message(chat_id, text, parse_mode="HTML")
+                await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
             elif data.startswith("lead_accept_"):
                 contact_id = int(data.replace("lead_accept_", ""))
@@ -2713,6 +3647,8 @@ class TelegramBotEngine:
                 contact_id = int(data.replace("insult_card_", ""))
                 await self.answer_callback_query(cq_id)
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if not contact:
                     await self.edit_message(chat_id, msg_id, "⚠️ Карточка клиента не найдена.", reply_markup={"inline_keyboard": [[{"text": "◀️ К списку", "callback_data": "menu_leads_insults"}]]})
@@ -2762,116 +3698,181 @@ class TelegramBotEngine:
 
                 await self.edit_message(chat_id, msg_id, card_text, reply_markup={"inline_keyboard": kb}, parse_mode="HTML")
 
-            # 2. Leads (Conversations / Chats)
+            # 2. Leads (Conversations / Chats CRM)
             elif data == "menu_leads_chats":
+                mgr_state.set_menu("menu_leads_chats")
                 await self.answer_callback_query(cq_id)
-                contacts = await StatsService.get_chat_leads(session, db_user_id)
-                if not contacts and is_admin:
-                    stmt_all = select(Contact).order_by(Contact.last_incoming_at.desc(), Contact.id.desc())
-                    res_all = await session.execute(stmt_all)
-                    contacts = list(res_all.scalars().all())
+                text, kb = await self.build_chats_crm_payload(
+                    session=session,
+                    db_user_id=db_user_id,
+                    is_admin=is_admin,
+                    filter_key=mgr_state.chat_filter,
+                    page=mgr_state.chat_page,
+                    search_query=mgr_state.chat_search_query,
+                )
+                await self.edit_message(chat_id, msg_id, text, reply_markup=kb, parse_mode="HTML")
 
-                if not contacts:
-                    text = (
-                        "💬 <b>ЛИДЫ (ОБЩЕНИЕ И ДИАЛОГИ)</b>\n\n"
-                        "📭 <b>У вас пока нет начатых диалогов.</b>\n\n"
-                        "Как только собеседники напишут вашему подключенному аккаунту — "
-                        "каждый клиент автоматически появится здесь в отдельной кнопке."
-                    )
-                    kb = {"inline_keyboard": [[{"text": "◀️ В главное меню", "callback_data": "menu_main"}]]}
-                else:
-                    text = (
-                        "💬 <b>ЛИДЫ (ОБЩЕНИЕ И ДИАЛОГИ):</b>\n\n"
-                        "Список всех клиентов, с которыми ведется или велось общение.\n"
-                        "<i>Нажмите на клиента для просмотра истории, голосовых и управления:</i>"
-                    )
-                    now_utc = datetime.now(timezone.utc)
-                    kb_rows = []
-                    for c in contacts[:15]:
-                        c_name = html.escape(c.first_name or f"User_{c.tg_id}")
-                        user_str = f" (@{c.username})" if c.username else ""
-                        if c.status == ContactStatus.BLOCKED or not c.ai_active:
-                            icon = "⛔️"
-                            state_lbl = "заблокирован"
-                        elif c.bot_paused:
-                            icon = "⏸"
-                            state_lbl = "на паузе"
-                        elif c.last_incoming_at and (now_utc - c.last_incoming_at.replace(tzinfo=timezone.utc)).total_seconds() < 1800:
-                            icon = "🟢"
-                            state_lbl = "активный диалог"
-                        elif c.last_incoming_at and (now_utc - c.last_incoming_at.replace(tzinfo=timezone.utc)).total_seconds() < 86400:
-                            icon = "🟡"
-                            state_lbl = "ожидает ответа"
-                        else:
-                            icon = "⚪️"
-                            state_lbl = "диалог завершен"
+            elif data.startswith("chats_filter_"):
+                mgr_state.set_menu("menu_leads_chats")
+                f_key = data.replace("chats_filter_", "")
+                mgr_state.chat_filter = f_key
+                mgr_state.chat_page = 1
+                await self.answer_callback_query(cq_id)
+                text, kb = await self.build_chats_crm_payload(
+                    session=session,
+                    db_user_id=db_user_id,
+                    is_admin=is_admin,
+                    filter_key=mgr_state.chat_filter,
+                    page=1,
+                    search_query=mgr_state.chat_search_query,
+                )
+                await self.edit_message(chat_id, msg_id, text, reply_markup=kb, parse_mode="HTML")
 
-                        btn_txt = f"{icon} {c_name}{user_str} — {state_lbl}"
-                        kb_rows.append([{"text": btn_txt, "callback_data": f"chat_card_{c.id}"}])
-                    kb_rows.append([{"text": "◀️ В главное меню", "callback_data": "menu_main"}])
-                    kb = {"inline_keyboard": kb_rows}
+            elif data.startswith("chats_page_"):
+                mgr_state.set_menu("menu_leads_chats")
+                rest = data.replace("chats_page_", "")
+                parts = rest.rsplit("_", 1)
+                f_key = parts[0] if len(parts) == 2 else mgr_state.chat_filter
+                pg = int(parts[1]) if (len(parts) == 2 and parts[1].isdigit()) else 1
+                mgr_state.chat_filter = f_key
+                mgr_state.chat_page = pg
+                await self.answer_callback_query(cq_id)
+                text, kb = await self.build_chats_crm_payload(
+                    session=session,
+                    db_user_id=db_user_id,
+                    is_admin=is_admin,
+                    filter_key=f_key,
+                    page=pg,
+                    search_query=mgr_state.chat_search_query,
+                )
+                await self.edit_message(chat_id, msg_id, text, reply_markup=kb, parse_mode="HTML")
+
+            elif data == "chats_search":
+                mgr_state.set_menu("menu_leads_chats")
+                self._user_input_states[user_tg_id] = "WAIT_CONTACT_SEARCH"
+                await self.answer_callback_query(cq_id)
+                await self.send_message(
+                    chat_id,
+                    "🔍 <b>Поиск по диалогам (CRM):</b>\n\n"
+                    "Отправьте имя, <code>@username</code>, тему разговора или тег клиента:",
+                    reply_markup=self.build_cancel_flow_kb("menu_leads_chats"),
+                    parse_mode="HTML",
+                )
+
+            elif data == "chats_clear_search":
+                mgr_state.chat_search_query = None
+                mgr_state.chat_page = 1
+                await self.answer_callback_query(cq_id, "Поиск сброшен")
+                text, kb = await self.build_chats_crm_payload(
+                    session=session,
+                    db_user_id=db_user_id,
+                    is_admin=is_admin,
+                    filter_key=mgr_state.chat_filter,
+                    page=1,
+                    search_query=None,
+                )
                 await self.edit_message(chat_id, msg_id, text, reply_markup=kb, parse_mode="HTML")
 
             elif data.startswith("chat_card_"):
                 contact_id = int(data.replace("chat_card_", ""))
-                await self.answer_callback_query(cq_id)
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if not contact:
-                    await self.edit_message(chat_id, msg_id, "⚠️ Карточка клиента не найдена.", reply_markup={"inline_keyboard": [[{"text": "◀️ К списку", "callback_data": "menu_leads_chats"}]]})
+                    await self.answer_callback_query(cq_id, "🔄 Это меню устарело. Обновляю актуальный список...")
+                    crm_txt, crm_kb = await self.build_chats_crm_payload(
+                        session=session,
+                        db_user_id=db_user_id,
+                        is_admin=is_admin,
+                        filter_key=mgr_state.chat_filter,
+                        page=1,
+                        search_query=mgr_state.chat_search_query,
+                    )
+                    await self.edit_message(
+                        chat_id,
+                        msg_id,
+                        "🔄 <i>Это меню устарело (карточка была удалена). Обновил актуальный список чатов:</i>\n\n" + crm_txt,
+                        reply_markup=crm_kb,
+                        parse_mode="HTML",
+                    )
                     return
 
+                await self.answer_callback_query(cq_id)
+                mgr_state.last_entity_type = "contact"
+                mgr_state.last_entity_id = contact.id
+                card_text, card_kb = self.build_contact_card_payload(contact)
+                await self.edit_message(chat_id, msg_id, card_text, reply_markup=card_kb, parse_mode="HTML")
+
+            elif data.startswith("chat_context_clear_"):
+                contact_id = int(data.replace("chat_context_clear_", ""))
+                stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
+                contact = (await session.execute(stmt_c)).scalars().first()
+                if not contact:
+                    await self.answer_callback_query(cq_id, "🔄 Это меню устарело.", show_alert=True)
+                    return
+                from companion.models.entities import ContactMemory
+                from sqlalchemy import delete as sa_delete
+                await session.execute(sa_delete(ContactMemory).where(ContactMemory.contact_id == contact_id))
+                await session.commit()
+                await self.answer_callback_query(cq_id, "🗑 Долгосрочные факты очищены")
+                ctx_text, ctx_kb = await self.build_contact_context_payload(session, contact)
+                await self.edit_message(chat_id, msg_id, ctx_text, reply_markup=ctx_kb, parse_mode="HTML")
+
+            elif data.startswith("chat_context_"):
+                contact_id = int(data.replace("chat_context_", ""))
+                stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
+                contact = (await session.execute(stmt_c)).scalars().first()
+                if not contact:
+                    await self.answer_callback_query(cq_id, "🔄 Это меню устарело. Обновляю список...")
+                    crm_txt, crm_kb = await self.build_chats_crm_payload(
+                        session=session, db_user_id=db_user_id, is_admin=is_admin
+                    )
+                    await self.edit_message(chat_id, msg_id, crm_txt, reply_markup=crm_kb, parse_mode="HTML")
+                    return
+                await self.answer_callback_query(cq_id)
+                mgr_state.last_entity_type = "contact"
+                mgr_state.last_entity_id = contact.id
+                ctx_text, ctx_kb = await self.build_contact_context_payload(session, contact)
+                await self.edit_message(chat_id, msg_id, ctx_text, reply_markup=ctx_kb, parse_mode="HTML")
+
+            elif data.startswith("chat_manual_reply_"):
+                contact_id = int(data.replace("chat_manual_reply_", ""))
+                stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
+                contact = (await session.execute(stmt_c)).scalars().first()
+                if not contact:
+                    await self.answer_callback_query(cq_id, "🔄 Контакт не найден. Обновляю список...")
+                    crm_txt, crm_kb = await self.build_chats_crm_payload(
+                        session=session, db_user_id=db_user_id, is_admin=is_admin
+                    )
+                    await self.edit_message(chat_id, msg_id, crm_txt, reply_markup=crm_kb, parse_mode="HTML")
+                    return
+                mgr_state.last_entity_type = "contact"
+                mgr_state.last_entity_id = contact.id
+                self._user_input_states[user_tg_id] = f"WAIT_CONTACT_MANUAL_REPLY:{contact.id}"
+                await self.answer_callback_query(cq_id)
                 c_name = html.escape(contact.first_name or f"User_{contact.tg_id}")
-                user_str = f"@{contact.username}" if contact.username else "нет"
-                first_dt = contact.created_at.strftime("%d.%m.%Y %H:%M") if contact.created_at else "-"
-                last_dt = contact.last_incoming_at.strftime("%d.%m.%Y %H:%M") if contact.last_incoming_at else "-"
-                status_text = "🟢 ИИ общается (активен)" if (contact.ai_active and not contact.bot_paused and contact.status == ContactStatus.ACTIVE) else "⛔️ Заблокирован / ИИ выключен"
-                diag_summary = html.escape(contact.dialogue_summary or "Обычная переписка")
-                diag_topics = html.escape(contact.dialogue_topics or "знакомство")
-
-                card_text = (
-                    f"💬 <b>КАРТОЧКА КЛИЕНТА (ОБЩЕНИЕ)</b>\n\n"
-                    f"👤 <b>Имя:</b> {c_name}\n"
-                    f"🔗 <b>Username:</b> {user_str}\n"
-                    f"🆔 <b>Telegram ID:</b> <code>{contact.tg_id}</code>\n"
-                    f"📅 <b>Дата первого обращения:</b> {first_dt}\n"
-                    f"⏰ <b>Время последнего контакта:</b> {last_dt}\n"
-                    f"📊 <b>Статус:</b> {status_text}\n"
-                    f"🏷 <b>Теги:</b> {contact.tags or '🟢 Активный'}\n\n"
-                    f"📈 <b>Активность сообщений:</b>\n"
-                    f"• Входящих от клиента: <b>{contact.total_messages_in}</b>\n"
-                    f"• Ответов нейросети: <b>{contact.total_messages_out}</b>\n"
-                    f"• Оскорблений/нарушений: <b>{contact.violation_count or 0}</b>\n\n"
-                    f"💡 <b>Темы разговора:</b> {diag_topics}\n"
-                    f"📝 <b>Краткое содержание диалога:</b>\n"
-                    f"{diag_summary}\n\n"
-                    f"<i>Управление диалогом:</i>"
+                await self.send_message(
+                    chat_id,
+                    f"✉️ <b>Ручной ответ клиенту {c_name}:</b>\n\n"
+                    f"Напишите текст сообщения в этот чат — бот отправит его клиенту от лица аккаунта "
+                    f"и автоматически поставит ИИ на паузу на 15 минут:",
+                    reply_markup=self.build_cancel_flow_kb(f"chat_card_{contact.id}"),
+                    parse_mode="HTML",
                 )
-
-                is_blocked = (contact.status == ContactStatus.BLOCKED or not contact.ai_active)
-                kb = [
-                    [
-                        {"text": "💬 Вся переписка", "callback_data": f"chat_history_{contact.id}"},
-                        {"text": "🎙 Послушать войсы", "callback_data": f"chat_voice_list_{contact.id}"},
-                    ],
-                    [
-                        {"text": "🏷 Управление тегами", "callback_data": f"chat_tags_{contact.id}"},
-                    ],
-                    [
-                        {"text": "🔓 Разблокировать / ИИ" if is_blocked else "⛔️ Заблокировать", "callback_data": f"chat_toggle_block_{contact.id}"},
-                        {"text": "▶️ Снять с паузы" if contact.bot_paused else "⏸ Поставить на паузу", "callback_data": f"chat_toggle_pause_{contact.id}"},
-                    ],
-                    [
-                        {"text": "🗑 Удалить диалог", "callback_data": f"lead_action_delete_{contact.id}"},
-                        {"text": "↩️ Назад к списку", "callback_data": "menu_leads_chats"},
-                    ]
-                ]
-                await self.edit_message(chat_id, msg_id, card_text, reply_markup={"inline_keyboard": kb}, parse_mode="HTML")
 
             elif data.startswith("chat_history_"):
                 contact_id = int(data.replace("chat_history_", ""))
                 await self.answer_callback_query(cq_id)
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if not contact:
                     await self.edit_message(chat_id, msg_id, "⚠️ Контакт не найден.", reply_markup={"inline_keyboard": [[{"text": "◀️ В меню", "callback_data": "menu_main"}]]})
@@ -2919,6 +3920,8 @@ class TelegramBotEngine:
             elif data.startswith("chat_voice_list_") or data.startswith("lead_play_voice_"):
                 contact_id = int(data.replace("chat_voice_list_", "").replace("lead_play_voice_", ""))
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if not contact:
                     await self.answer_callback_query(cq_id, "⚠️ Клиент не найден.", show_alert=True)
@@ -2949,6 +3952,8 @@ class TelegramBotEngine:
                 contact_id = int(data.replace("chat_tags_", ""))
                 await self.answer_callback_query(cq_id)
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if not contact:
                     await self.answer_callback_query(cq_id, "⚠️ Клиент не найден.", show_alert=True)
@@ -2990,6 +3995,8 @@ class TelegramBotEngine:
                 contact_id = int(parts[0])
                 tag_key = parts[1]
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if contact:
                     tag_map = {
@@ -3019,6 +4026,8 @@ class TelegramBotEngine:
             elif data.startswith("lead_action_continue_"):
                 contact_id = int(data.replace("lead_action_continue_", ""))
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if contact:
                     contact.status = ContactStatus.ACTIVE
@@ -3050,6 +4059,8 @@ class TelegramBotEngine:
             elif data.startswith("lead_action_block_") or data.startswith("chat_toggle_block_"):
                 contact_id = int(data.replace("lead_action_block_", "").replace("chat_toggle_block_", ""))
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if contact:
                     if contact.status == ContactStatus.BLOCKED or not contact.ai_active:
@@ -3083,6 +4094,8 @@ class TelegramBotEngine:
             elif data.startswith("chat_toggle_pause_"):
                 contact_id = int(data.replace("chat_toggle_pause_", ""))
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if contact:
                     contact.bot_paused = not contact.bot_paused
@@ -3097,6 +4110,8 @@ class TelegramBotEngine:
             elif data.startswith("unpause_contact_"):
                 contact_id = int(data.replace("unpause_contact_", ""))
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if contact:
                     contact.bot_paused = False
@@ -3121,18 +4136,26 @@ class TelegramBotEngine:
 
             elif data.startswith("lead_action_delete_"):
                 contact_id = int(data.replace("lead_action_delete_", ""))
-                await self.answer_callback_query(cq_id)
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if not contact:
-                    await self.answer_callback_query(cq_id, "⚠️ Клиент не найден.", show_alert=True)
+                    await self.answer_callback_query(cq_id, "🔄 Это меню устарело. Обновляю список...", show_alert=True)
+                    crm_txt, crm_kb = await self.build_chats_crm_payload(
+                        session=session, db_user_id=db_user_id, is_admin=is_admin
+                    )
+                    await self.edit_message(chat_id, msg_id, crm_txt, reply_markup=crm_kb, parse_mode="HTML")
                     return
+                await self.answer_callback_query(cq_id)
+                mgr_state.pending_confirmation = {"action": "delete_contact", "target_id": contact.id}
                 c_name = html.escape(contact.first_name or f"User_{contact.tg_id}")
                 text = (
                     f"⚠️ <b>ПОДТВЕРЖДЕНИЕ УДАЛЕНИЯ</b>\n\n"
                     f"Вы уверены, что хотите удалить переписку и карточку клиента <b>{c_name}</b>?\n\n"
                     f"• Карточка будет удалена из активной панели управления.\n"
-                    f"• Бот забудет текущий контекст и историю с этим пользователем."
+                    f"• Бот забудет текущий контекст и историю с этим пользователем.\n\n"
+                    f"<i>(Нажмите кнопку ниже или просто напишите «да» / «отмена»)</i>"
                 )
                 kb = [
                     [{"text": "🗑 Да, удалить", "callback_data": f"confirm_delete_{contact.id}"}],
@@ -3142,7 +4165,10 @@ class TelegramBotEngine:
 
             elif data.startswith("confirm_delete_"):
                 contact_id = int(data.replace("confirm_delete_", ""))
+                mgr_state.pending_confirmation = None
                 stmt_c = select(Contact).where(Contact.id == contact_id)
+                if not is_admin:
+                    stmt_c = stmt_c.where(Contact.user_id == db_user_id)
                 contact = (await session.execute(stmt_c)).scalars().first()
                 if contact:
                     await session.delete(contact)
@@ -3151,14 +4177,15 @@ class TelegramBotEngine:
                 await self.edit_message(
                     chat_id, msg_id,
                     "🗑 <b>Диалог успешно удален!</b>\n\nКарточка и переписка удалены из панели управления.",
-                    reply_markup={"inline_keyboard": [[{"text": "◀️ В главное меню", "callback_data": "menu_main"}]]},
+                    reply_markup={"inline_keyboard": [[{"text": "💬 К списку чатов", "callback_data": "menu_leads_chats"}], [{"text": "◀️ В главное меню", "callback_data": "menu_main"}]]},
                     parse_mode="HTML"
                 )
 
             # 3. Detailed Leads Statistics & CSV Export
             elif data.startswith("menu_leads_stats"):
+                mgr_state.set_menu("menu_leads_stats")
                 period = data.replace("menu_leads_stats_", "")
-                if period not in ("today", "yesterday", "7d", "30d"):
+                if period not in ("today", "yesterday", "7d", "30d", "all"):
                     period = "today"
                 await self.answer_callback_query(cq_id)
 
@@ -3171,11 +4198,13 @@ class TelegramBotEngine:
                     f"• Всего лидов за период: <b>{stats['total_leads']}</b>\n"
                     f"• Новых клиентов: <b>{stats['new_clients']}</b>\n"
                     f"• Активных диалогов: <b>{stats['active_dialogues']}</b>\n"
+                    f"• Горячих лидов (встреча / квест): <b>{stats.get('meetup_leads', 0)} / {stats.get('quest_leads', 0)}</b>\n"
                     f"• Завершенных диалогов: <b>{stats['completed_dialogues']}</b>\n"
                     f"• Заблокированных клиентов: <b>{stats['blocked_clients']}</b>\n"
                     f"• Лидов с оскорблениями/грубостью: <b>{stats['insult_leads']}</b>\n"
                     f"• Входящих текстовых сообщений: <b>{stats['incoming_text_count']}</b>\n"
                     f"• Входящих голосовых сообщений: <b>{stats['incoming_voice_count']}</b>\n"
+                    f"• Отправлено голосовых ИИ: <b>{stats.get('outgoing_voice_count', 0)}</b>\n"
                     f"• Распознано голосовых: <b>{stats['voice_transcribed_count']}</b> (100%)\n"
                     f"• Среднее кол-во сообщений на клиента: <b>{stats['avg_messages_per_client']}</b>\n\n"
                     f"👥 <b>ДЕТАЛИЗАЦИЯ ПО ЛИДАМ:</b>\n"
@@ -3201,6 +4230,7 @@ class TelegramBotEngine:
                 yest_btn = "• Вчера •" if period == "yesterday" else "Вчера"
                 w_btn = "• 7 дней •" if period == "7d" else "7 дней"
                 m_btn = "• 30 дней •" if period == "30d" else "30 дней"
+                all_btn = "• За всё время •" if period == "all" else "За всё время"
 
                 kb = [
                     [
@@ -3210,9 +4240,11 @@ class TelegramBotEngine:
                     [
                         {"text": w_btn, "callback_data": "menu_leads_stats_7d"},
                         {"text": m_btn, "callback_data": "menu_leads_stats_30d"},
+                        {"text": all_btn, "callback_data": "menu_leads_stats_all"},
                     ],
                     [
                         {"text": "📥 Скачать CSV-отчет", "callback_data": f"export_leads_csv_{period}"},
+                        {"text": "💬 Открыть чаты (CRM)", "callback_data": "menu_leads_chats"},
                     ],
                     [
                         {"text": "◀️ В главное меню", "callback_data": "menu_main"},
@@ -3291,6 +4323,19 @@ class TelegramBotEngine:
                     chat_id=chat_id,
                     text=benchmark_text,
                     caption="🎙 <b>Голосовое сообщение (Быстрый тест)</b>\n<i>«Слушай, ну я только что домой зашла, вообще без сил...»</i>",
+                )
+
+            elif data == "voice_custom_text":
+                mgr_state.set_menu("menu_voice_test")
+                self._user_input_states[user_tg_id] = "WAIT_CUSTOM_VOICE_TEXT"
+                await self.answer_callback_query(cq_id)
+                await self.send_message(
+                    chat_id,
+                    "✍️ <b>Озвучка вашего текста (Voice Lab):</b>\n\n"
+                    "Отправьте любую фразу в этот чат — бот подготовит естественную фонетическую разметку "
+                    "(паузы, дыхание, ударения) и пришлет готовое голосовое сообщение в формате Telegram OGG Opus:",
+                    reply_markup=self.build_cancel_flow_kb("menu_voice_test"),
+                    parse_mode="HTML",
                 )
 
             elif data == "menu_voice_test":
@@ -3541,7 +4586,11 @@ class TelegramBotEngine:
 
             elif data.startswith("disconnect_acc_"):
                 acc_id = int(data.replace("disconnect_acc_", ""))
-                ok = await AccountService.disconnect_account(session, acc_id)
+                stmt_a = select(AccountSession).where(AccountSession.id == acc_id)
+                if not is_admin:
+                    stmt_a = stmt_a.where(AccountSession.user_id == db_user_id)
+                target_acc = (await session.execute(stmt_a)).scalars().first()
+                ok = await AccountService.disconnect_account(session, acc_id) if target_acc else False
                 if ok:
                     await self.answer_callback_query(cq_id, "⏸ Аккаунт отключен")
                 else:
@@ -3577,7 +4626,11 @@ class TelegramBotEngine:
 
             elif data.startswith("reconnect_acc_"):
                 acc_id = int(data.replace("reconnect_acc_", ""))
-                acc = await AccountService.toggle_account(session, acc_id, is_active=True)
+                stmt_a = select(AccountSession).where(AccountSession.id == acc_id)
+                if not is_admin:
+                    stmt_a = stmt_a.where(AccountSession.user_id == db_user_id)
+                target_acc = (await session.execute(stmt_a)).scalars().first()
+                acc = await AccountService.toggle_account(session, acc_id, is_active=True) if target_acc else None
                 if acc:
                     await self.answer_callback_query(cq_id, "▶️ Аккаунт включен")
                 else:
@@ -3613,7 +4666,11 @@ class TelegramBotEngine:
 
             elif data.startswith("delete_acc_"):
                 acc_id = int(data.replace("delete_acc_", ""))
-                ok = await AccountService.delete_account(session, acc_id)
+                stmt_a = select(AccountSession).where(AccountSession.id == acc_id)
+                if not is_admin:
+                    stmt_a = stmt_a.where(AccountSession.user_id == db_user_id)
+                target_acc = (await session.execute(stmt_a)).scalars().first()
+                ok = await AccountService.delete_account(session, acc_id) if target_acc else False
                 if ok:
                     await self.answer_callback_query(cq_id, "🗑 Аккаунт удален")
                 else:

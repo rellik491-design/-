@@ -225,6 +225,10 @@ class Contact(Base):
     reengage_context: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     pending_overnight_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Daivinchik / Dating context & discovered profile
+    discovered_profile_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    dating_discovery_source: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     # Lead moderation, insults & tags management
     violation_count: Mapped[int] = mapped_column(Integer, default=0)
     has_violation: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -250,9 +254,27 @@ class Contact(Base):
     memories: Mapped[List["ContactMemory"]] = relationship(
         back_populates="contact", cascade="all, delete-orphan"
     )
+    behavioral_preferences: Mapped[List["ContactBehavioralPreference"]] = relationship(
+        back_populates="contact", cascade="all, delete-orphan"
+    )
     summary_record: Mapped[Optional["ConversationSummary"]] = relationship(
         back_populates="contact", cascade="all, delete-orphan", uselist=False
     )
+
+    def get_discovered_profile(self) -> Optional[dict]:
+        """Returns parsed Daivinchik / dating profile data as dict if available."""
+        if not self.discovered_profile_data:
+            return None
+        try:
+            import json
+            return json.loads(self.discovered_profile_data)
+        except Exception:
+            return None
+
+    def set_discovered_profile(self, data: dict) -> None:
+        """Stores structured Daivinchik / dating profile data as JSON."""
+        import json
+        self.discovered_profile_data = json.dumps(data, ensure_ascii=False)
 
 
 class ContactMessage(Base):
@@ -305,6 +327,28 @@ class ContactMemory(Base):
     )
 
     contact: Mapped["Contact"] = relationship(back_populates="memories")
+
+
+class ContactBehavioralPreference(Base):
+    """
+    Level 3: Persistent behavioral learning memory per contact.
+    Tracks learned communication preferences (length, emojis, humor, teasing, rhythm)
+    with source attribution (explicit user feedback vs observed outcomes) and confidence.
+    """
+    __tablename__ = "contact_behavioral_preferences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    preference_key: Mapped[str] = mapped_column(String(64), index=True)
+    preference_value: Mapped[str] = mapped_column(String(256))
+    confidence: Mapped[str] = mapped_column(String(16), default="medium")  # high, medium, low
+    source: Mapped[str] = mapped_column(String(32), default="observed_outcome")  # explicit_user_feedback, observed_outcome
+    evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    contact: Mapped["Contact"] = relationship(back_populates="behavioral_preferences")
 
 
 class ConversationSummary(Base):

@@ -90,6 +90,10 @@ async def init_db():
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN emoji_frequency VARCHAR(32) DEFAULT 'medium'")
             if "likes_multi_message_responses" not in c_cols:
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN likes_multi_message_responses BOOLEAN DEFAULT 1")
+            if "discovered_profile_data" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN discovered_profile_data TEXT NULL")
+            if "dating_discovery_source" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN dating_discovery_source VARCHAR(64) NULL")
 
             # contact_messages
             res_cm = sync_conn.exec_driver_sql("PRAGMA table_info(contact_messages)").fetchall()

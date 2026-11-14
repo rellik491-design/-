@@ -105,38 +105,44 @@ def test_safe_phonetics_and_homographs():
 
 
 def test_get_dynamic_voice_settings():
-    joy_vs = VoiceService.get_dynamic_voice_settings("ахах, классная шутка, супер!")
-    assert joy_vs.stability == 0.38
-    assert joy_vs.style == 0.30
-    assert joy_vs.use_speaker_boost is True
+    excited_vs = VoiceService.get_dynamic_voice_settings("супер, отличная новость!")
+    assert excited_vs.stability == 0.50
+    assert excited_vs.style == 0.10
+    assert excited_vs.use_speaker_boost is True
 
-    curious_vs = VoiceService.get_dynamic_voice_settings("серьезно? а ты откуда сам?")
-    assert curious_vs.stability == 0.42
-    assert curious_vs.style == 0.26
+    curious_vs = VoiceService.get_dynamic_voice_settings("а ты откуда сам?")
+    assert curious_vs.stability == 0.52
+    assert curious_vs.style == 0.08
 
     tired_vs = VoiceService.get_dynamic_voice_settings("я сегодня так устала, вообще без сил, пойду спать")
-    assert tired_vs.stability == 0.50
-    assert tired_vs.style == 0.15
+    assert tired_vs.stability == 0.58
+    assert tired_vs.style == 0.03
 
     casual_vs = VoiceService.get_dynamic_voice_settings("да вот чай пью, музыку включила")
-    assert casual_vs.stability == 0.44
-    assert casual_vs.style == 0.22
+    assert casual_vs.stability == 0.54
+    assert casual_vs.style == 0.05
+    # Strict safety: stability must never drop below 0.50 to prevent trembling/monster artifacts
+    assert excited_vs.stability >= 0.50
+    assert curious_vs.stability >= 0.50
+    assert tired_vs.stability >= 0.50
+    assert casual_vs.stability >= 0.50
 
 
-def test_natural_breathing_and_pauses():
+def test_natural_speech_and_no_decorative_laughter():
     text = "да вот дома, а ты чем занят? ахахах, ну ты даешь"
     prepared = VoiceService.prepare_text_for_tts(text)
 
-    # Starts with a soft breathing pause
-    assert prepared.startswith("...")
-    # Laughter transformed into natural chuckles and sighs
-    assert "... хах..." in prepared
-    # Conjunction breathing pause
-    assert "... а ты" in prepared
+    # STRICT: Does not start with artificial breathing pause '...'
+    assert not prepared.startswith("...")
+    # STRICT NEGATIVE VOICE DIRECTION: Decorative laughter tokens are stripped
+    assert "ахахах" not in prepared
+    assert "хах" not in prepared
+    # Natural words preserved
+    assert "дома" in prepared
+    assert "занят" in prepared
     # No punctuation collisions like '...,' or ', ...'
     assert "...," not in prepared
     assert ", ..." not in prepared
-    assert ",..." not in prepared
 
 
 def test_incoming_voice_probability():
@@ -190,6 +196,36 @@ def test_mastering_equalizer_post_processing():
     assert "equalizer=f=800:width_type=q:width=1.0:gain=-1.45" in eq_str
     assert "equalizer=f=2841:width_type=q:width=1.0:gain=1.0" in eq_str
     assert "highshelf=f=6678:gain=0.60" in eq_str
+
+    # Check subtle smartphone recording texture components
+    tex_str = VoiceService.SUBTLE_TEXTURE_FILTER_COMPLEX
+    assert "asoftclip=type=atan" in tex_str
+    assert "acompressor" in tex_str
+    assert "anoisesrc=color=pink" in tex_str
+    assert "lowpass=f=12500" in tex_str
+    assert "alimiter" in tex_str
+
+
+def test_russian_prosody_master_prompt_flow_and_pronunciation():
+    # 1. Connected thought group flow (no chopped commas before relative clauses)
+    raw_thought = "Да я просто не ожидала, что ты реально это сделаешь."
+    prep_thought = VoiceService.prepare_text_for_tts(raw_thought)
+    assert "не ожидала что" in prep_thought
+    assert "не ожидала, что" not in prep_thought
+
+    raw_thought2 = "Ну я не знаю, мне кажется, это как-то странно."
+    prep_thought2 = VoiceService.prepare_text_for_tts(raw_thought2)
+    assert "мне кажется это" in prep_thought2
+
+    # 2. Pronunciation correction layer (acronyms, slang, stress)
+    raw_slang = "скинь мне гс в тг, я сейчас занята, кофе пью и смотрю дайвинчик"
+    prep_slang = VoiceService.prepare_text_for_tts(raw_slang)
+    assert "гэ э́с" in prep_slang
+    assert "тэ гэ́" in prep_slang
+    assert "занята́" in prep_slang
+    assert "ко́фэ" in prep_slang
+    assert "дайви́нчик" in prep_slang
+
 
 
 

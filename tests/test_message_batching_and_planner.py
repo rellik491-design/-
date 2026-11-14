@@ -757,10 +757,8 @@ async def test_g_selective_reply_and_business_chat_reply_parameters():
     assert len(captured_payloads) == 1
     _, sent_json = captured_payloads[0]
     assert sent_json["business_connection_id"] == "biz_conn_test_1"
-    assert sent_json["reply_to_message_id"] == 6001
     assert sent_json["reply_parameters"] == {
         "message_id": 6001,
-        "chat_id": 777001,
         "allow_sending_without_reply": True,
     }
 

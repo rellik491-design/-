@@ -23,6 +23,114 @@ class VoiceService:
     DEFAULT_FEMALE_VOICE = "ru-RU-SvetlanaNeural"
     VOICE_PACK_DIR = Path("assets/voice_pack")
 
+    # RUSSIAN NATURAL SPEECH PROSODY MASTER PROMPT DIRECTIVE
+    RUSSIAN_NATURAL_SPEECH_PROSODY_MASTER_PROMPT = """
+    PRIMARY OBJECTIVE:
+    Generate Russian speech that sounds like a real person spontaneously speaking,
+    not like a TTS system reading written text.
+    Natural conversational delivery is more important than robotic clarity.
+
+    1. PHRASE-LEVEL INTONATION & CONNECTED THOUGHTS:
+    Speak in thought groups, not isolated chopped sentences.
+    Avoid mechanical sentence segmentation.
+
+    2. VARIED SENTENCE ENDINGS:
+    Do not end every sentence with the same falling pitch (↓↓↓).
+    Differentiate statement, question, unfinished thought, continuation, reaction,
+    doubt, sarcasm, and playfulness.
+
+    3. NATURAL QUESTION CONTOURS:
+    Do not raise every question with an exaggerated upward spike (↑↑↑).
+    Intonation follows intent (curiosity, surprise, teasing, rhetorical).
+
+    4. RUSSIAN WORD STRESS & PRONUNCIATION DICTIONARY:
+    Lexical stress must be authentic. Use pronunciation layer for slang,
+    messaging acronyms (гс, вк, тг, лс, инста), borrowed words, and verbs.
+
+    5. PHRASE STRESS ≠ WORD STRESS:
+    Identify semantic focus of the thought (1-2 important words).
+    Do not emphasize every word.
+
+    6. SHORT TELEGRAM REACTIONS:
+    Spontaneous, effortless conversational reactions (ну да, серьёзно?, не знаю, да ладно, прикинь).
+
+    7. NO ROBOTIC RHYTHM & NO AI VOICE ACTING:
+    No fake smiles, fake breaths, fake giggles, or exaggerated pitch acrobatics.
+    Real person thinking and speaking in real time.
+    """
+
+    # Section 19: Pronunciation Correction Layer for Russian Conversational Speech
+    PRONUNCIATION_DICTIONARY: Dict[str, str] = {
+        # Social & Telegram Messenger Slang
+        r"\bгс\b": "гэ э́с",
+        r"\bвк\b": "вэ ка́",
+        r"\bтг\b": "тэ гэ́",
+        r"\bлс\b": "эл э́с",
+        r"\bсмс\b": "эс эм э́с",
+        r"\bсмски\b": "эс эм э́ски",
+        r"\bсмску\b": "эс эм э́ску",
+        r"\bинста\b": "и́нста",
+        r"\bинсте\b": "и́нсте",
+        r"\bинсту\b": "и́нсту",
+        r"\bдайвинчик\b": "дайви́нчик",
+        r"\bдайвинчике\b": "дайви́нчике",
+        r"\bдайвинчика\b": "дайви́нчика",
+        r"\bдайвинчику\b": "дайви́нчику",
+        r"\bтиндер\b": "ти́ндер",
+        r"\bтиндере\b": "ти́ндере",
+        r"\bтиндеру\b": "ти́ндеру",
+        r"\bвойс\b": "войс",
+        r"\bвойсы\b": "во́йсы",
+        r"\bвойсик\b": "во́йсик",
+        r"\bкружок\b": "кружо́к",
+        r"\bкружочек\b": "кружо́чек",
+        r"\bкружочки\b": "кружо́чки",
+        r"\bрилс\b": "рилс",
+        r"\bрилсы\b": "ри́лсы",
+        r"\bвайб\b": "вайб",
+        r"\bвайбовый\b": "вайбо́вый",
+        r"\bвайбово\b": "вайбо́во",
+        r"\bкринж\b": "кринж",
+        r"\bкринжовый\b": "кринжо́вый",
+        r"\bкринжово\b": "кринжо́во",
+        r"\bкраш\b": "краш",
+        r"\bкрашиха\b": "краши́ха",
+        r"\bтрек\b": "трэк",
+        r"\bтреки\b": "трэ́ки",
+        r"\bтрека\b": "трэ́ка",
+        r"\bчат\b": "чат",
+        r"\bчате\b": "ча́те",
+        r"\bчатик\b": "ча́тик",
+        r"\bстикер\b": "сти́кер",
+        r"\bстикеры\b": "сти́керы",
+        r"\bгифка\b": "ги́фка",
+        r"\bгифку\b": "ги́фку",
+        r"\bгифки\b": "ги́фки",
+        r"\bкофе\b": "ко́фэ",
+        r"\bкафе\b": "кафэ́",
+        r"\bинфо\b": "и́нфо",
+        # Irregular & Mobile Russian Stresses
+        r"\bзанята\b": "занята́",
+        r"\bпоняла\b": "поняла́",
+        r"\bспала\b": "спала́",
+        r"\bждала\b": "ждала́",
+        r"\bбрала\b": "брала́",
+        r"\bзвонит\b": "звони́т",
+        r"\bзвонят\b": "звоня́т",
+        r"\bпозвонит\b": "позвони́т",
+        r"\bпозвонят\b": "позвоня́т",
+        r"\bвключит\b": "включи́т",
+        r"\bвключат\b": "включа́т",
+        r"\bкрасивее\b": "краси́вее",
+        r"\bоблегчит\b": "облегчи́т",
+        r"\bдоговор\b": "догово́р",
+        r"\bдоговоры\b": "догово́ры",
+        r"\bдоговора\b": "догово́ры",
+        r"\bторты\b": "то́рты",
+        r"\bбанты\b": "ба́нты",
+        r"\bшарфы\b": "ша́рфы",
+    }
+
     @classmethod
     def get_voice_pack_dir(cls) -> Path:
         cls.VOICE_PACK_DIR.mkdir(parents=True, exist_ok=True)
@@ -197,164 +305,119 @@ class VoiceService:
     def get_dynamic_voice_settings(cls, text: str):
         """
         Dynamically calibrates ElevenLabs voice stability, style, and expression
-        based on conversational context:
-        - Joyful/flirt/laughter: lower stability (0.38) & higher style (0.30) for lively pitch, giggles, breathing.
-        - Curious/questioning: stability 0.42 & style 0.26 for natural questioning inflections.
-        - Serious/tired: stability 0.50 & style 0.15 for calmer, softer, slower cadence.
-        - Standard casual: stability 0.44 & style 0.22 for balanced, warm human speech.
+        based on conversational context, adhering to:
+        - NEGATIVE VOICE DIRECTION — STRICT (no decorative laughter, no trembling, stability >= 0.50)
+        - MASTER VOICE GENERATION DIRECTIVE (Lika QSaGDZOf5RWf5LPBHH15)
         """
         from elevenlabs import VoiceSettings
         text_low = text.lower()
 
-        # 1. Joyful / Flirt / Laughter / Good news
-        if any(w in text_low for w in ["ахах", "хах", "хихи", "класс", "супер", "круто", "ура", "мило", "обожаю", "ого", "красиво", "отлично", "кайф"]):
+        # Check mood/intent using clean regex word boundaries \b to avoid substring collisions:
+        # 1. Serious / Grounded
+        if re.search(r"\b(серьезно|важно|проблема|правда|честно|дело|решим|подумай)\b", text_low) and "?" not in text:
             return VoiceSettings(
-                stability=0.38,
-                similarity_boost=0.76,
-                style=0.30,
+                stability=0.60,
+                similarity_boost=0.84,
+                style=0.03,
                 use_speaker_boost=True,
             )
-        # 2. Curious / Questioning / Interested
-        elif "?" in text or any(w in text_low for w in ["серьезно", "правда", "а ты", "расскажи", "почему", "зачем", "где ты", "как ты", "что думаешь"]):
+        # 2. Sad / Sympathetic
+        elif re.search(r"\b(грустно|жаль|больно|печально|сочувствую|тяжело|обидно|жалко)\b", text_low):
             return VoiceSettings(
-                stability=0.42,
-                similarity_boost=0.78,
-                style=0.26,
+                stability=0.58,
+                similarity_boost=0.84,
+                style=0.04,
                 use_speaker_boost=True,
             )
-        # 3. Serious / Tired / Calmer tone
-        elif any(w in text_low for w in ["устала", "без сил", "тяжелый", "завал", "болею", "грустно", "не знаю", "спать", "до завтра"]):
+        # 3. Annoyed / Angry
+        elif re.search(r"\b(бесит|достало|надоело|злюсь|отстань|хватит|раздражает)\b", text_low):
+            return VoiceSettings(
+                stability=0.62,
+                similarity_boost=0.85,
+                style=0.02,
+                use_speaker_boost=True,
+            )
+        # 4. Tired / Night / Sleep
+        elif re.search(r"\b(устала|без сил|завал|болею|спать|до завтра|спокойной ночи|добранич|отдыхать|вымоталась)\b", text_low):
+            return VoiceSettings(
+                stability=0.58,
+                similarity_boost=0.84,
+                style=0.03,
+                use_speaker_boost=True,
+            )
+        # 5. Sarcastic / Dry deadpan (strictly NO laughter)
+        elif re.search(r"\b(ну да конечно|ага конечно|ну прям|сарказм|да неужели)\b", text_low):
+            return VoiceSettings(
+                stability=0.58,
+                similarity_boost=0.84,
+                style=0.04,
+                use_speaker_boost=True,
+            )
+        # 6. Curious / Questioning
+        elif "?" in text or re.search(r"\b(почему|зачем|где ты|как ты|что думаешь|расскажи|откуда|куда|ты о чем)\b", text_low):
+            return VoiceSettings(
+                stability=0.52,
+                similarity_boost=0.82,
+                style=0.08,
+                use_speaker_boost=True,
+            )
+        # 7. Excited / Joyful (buoyant, but stability strictly >= 0.50)
+        elif re.search(r"\b(супер|ура|круто|ого|кайф|отлично|поздравляю|восторг|шикарно)\b", text_low):
             return VoiceSettings(
                 stability=0.50,
                 similarity_boost=0.80,
-                style=0.15,
+                style=0.10,
                 use_speaker_boost=True,
             )
-        # 4. Natural balanced conversational tone
+        # 8. Flirty / Warm & intimate (clean, no over-breathiness)
+        elif re.search(r"\b(скучаю|милый|красивый|нравишься|обнимаю|целую|жду тебя|притягательный)\b", text_low):
+            return VoiceSettings(
+                stability=0.54,
+                similarity_boost=0.82,
+                style=0.06,
+                use_speaker_boost=True,
+            )
+        # 9. Playful (strictly NO laughter, subtle conversational smile)
+        elif re.search(r"\b(хитрая|подкалываешь|шутник|ну ты даешь|ловко)\b", text_low):
+            return VoiceSettings(
+                stability=0.54,
+                similarity_boost=0.82,
+                style=0.07,
+                use_speaker_boost=True,
+            )
+        # 10. Default Natural Casual / Neutral
         else:
             return VoiceSettings(
-                stability=0.44,
-                similarity_boost=0.78,
-                style=0.22,
+                stability=0.54,
+                similarity_boost=0.82,
+                style=0.05,
                 use_speaker_boost=True,
             )
 
     @classmethod
     def prepare_text_for_tts(cls, text: str) -> str:
         """
-        Prepares conversational Russian text for ultra-realistic ElevenLabs TTS:
-        - Removes emojis, brackets ))), stars *, URLs and @mentions
-        - Converts numbers into Russian words
-        - Enforces 'ё' on frequent words to prevent wrong stress
-        - Enhances natural breathing punctuation (..., —, commas)
-        - Inserts organic breath pauses and hesitation markers
+        Prepares conversational Russian text for ultra-realistic ElevenLabs TTS
+        via the Advanced Prosody Controller & Pronunciation Dictionary.
         """
-        # 1. Strip URLs and @mentions
-        clean = re.sub(r"https?://\S+|t\.me/\S+|@\w+", "", text)
-        # 2. Strip emojis
-        clean = re.sub(r"[\U00010000-\U0010ffff\u2600-\u27ff\u2300-\u23ff\u2b50\u200d\ufe0f]", "", clean)
-        # 3. Strip asterisks and combining stress marks, and replace '!' with '.'
-        clean = clean.replace("*", "").replace("\u0301", "").replace("!", ".")
-        # 4. Convert smileys )) and (( into conversational pauses and soft chuckles
-        clean = re.sub(r"\){3,}", "... ахах... ", clean)
-        clean = re.sub(r"\){1,2}", "... ", clean)
-        clean = re.sub(r"\({2,}", "... ой... ", clean)
-        clean = re.sub(r"\({1}", "... ", clean)
-        # 5. Convert numbers to words
-        clean = cls.digits_to_words(clean)
+        if not text:
+            return ""
+        from companion.services.prosody_controller import AdvancedProsodyController
 
-        # Helper for case-preserving replacement
-        def apply_replacements(s: str, mapping: Dict[str, str]) -> str:
-            for pattern, rep in mapping.items():
-                def make_repl(target_rep: str):
-                    def repl_fn(m):
-                        val = m.group(0)
-                        if val.isupper():
-                            return target_rep.upper()
-                        elif val[0].isupper():
-                            return target_rep.capitalize()
-                        return target_rep
-                    return repl_fn
-                s = re.sub(pattern, make_repl(rep), s, flags=re.IGNORECASE)
-            return s
+        prosody_obj = AdvancedProsodyController.process_for_tts(
+            text=text,
+            digits_to_words_fn=cls.digits_to_words,
+        )
+        return prosody_obj.speech_text
 
-        # Stage 1: Auto-replace 'е' -> 'ё' ('ё' in ElevenLabs always pulls stress 100%)
-        # "все" -> "всё", кроме ("все мы", "все они", "все вы", "все люди")
-        def vse_repl(m):
-            w = m.group(0)
-            return "Всё" if w[0].isupper() else "всё"
-
-        clean = re.sub(r"\b([Вв])се\b(?!\s+(?:мы|они|вы|люди))\b", vse_repl, clean)
-
-        yo_map = {
-            r"\bеще\b": "ещё",
-            r"\bче\b": "чё",
-            r"\bчет\b": "чёт",
-            r"\bниче\b": "ничё",
-            r"\bпридет\b": "придёт",
-            r"\bпридешь\b": "придёшь",
-            r"\bуйдет\b": "уйдёт",
-            r"\bпойдет\b": "пойдёт",
-            r"\bзаймет\b": "займёт",
-            r"\bначнет\b": "начнёт",
-            r"\bпоймет\b": "поймёт",
-            r"\bждет\b": "ждёт",
-            r"\bждешь\b": "ждёшь",
-            r"\bзовет\b": "зовёт",
-            r"\bживет\b": "живёт",
-            r"\bберет\b": "берёт",
-            r"\bберешь\b": "берёшь",
-            r"\bпьешь\b": "пьёшь",
-            r"\bпьет\b": "пьёт",
-            r"\bпьем\b": "пьём",
-            r"\bнайдет\b": "найдёт",
-            r"\bпойдем\b": "пойдём",
-            r"\bидем\b": "идём",
-            r"\bмое\b": "моё",
-            r"\bтвое\b": "твоё",
-            r"\bсвое\b": "своё",
-            r"\bее\b": "её",
-            r"\bнее\b": "неё",
-            r"\bокей\b": "окэй",
-            r"\bчерт\b": "чёрт",
-        }
-        clean = apply_replacements(clean, yo_map)
-
-        # Stage 2: Auto-replace trap homographs with 100% unambiguous spoken synonyms
-        homograph_map = {
-            r"\bсбегаю\b": "схожу",
-            r"\bсбегать\b": "сходить",
-            r"\bстоит\b": "надо",
-            r"\bзамок\b": "замочек",
-            r"\bплачу\b": "реву",
-            r"\bпишу\b": "напишу",
-        }
-        clean = apply_replacements(clean, homograph_map)
-
-        # 7. Normalize hyphens to em-dashes for intonation accents
-        clean = re.sub(r"\s+-\s+", " — ", clean)
-
-        # 8. Natural sighs and breathing intake for realistic ElevenLabs speech
-        clean = clean.strip()
-        if clean and not clean.startswith("...") and not clean.startswith("—"):
-            clean = f"... {clean}"
-
-        # Soft pauses and breath intake before natural coordinating words
-        clean = re.sub(r",\s+(но|а|слушай|давай|просто|блин|кстати|короче|в общем)\b", r"... \1", clean)
-        clean = re.sub(r"(?i)\bахахах+\b", "... хах...", clean)
-        clean = re.sub(r"(?i)\bахах\b", "... хах...", clean)
-        clean = re.sub(r"(?i)\bхахах\b", "... хах...", clean)
-
-        # Clean up punctuation collisions around ellipses
-        clean = re.sub(r"\.\.\.\s*,", "...", clean)
-        clean = re.sub(r",\s*\.\.\.", "...", clean)
-        clean = re.sub(r"\s+", " ", clean).strip()
-        clean = re.sub(r"\.{4,}", "...", clean)
-        return clean
-
-    # Studio-grade Mastering Equalizer specified by user:
-    # Low Cut 62Hz 24dB/oct (cascaded 2-pole highpass), Bell 194Hz -2.33dB, Bell 437Hz -1.12dB,
-    # Bell 800Hz -1.45dB, Bell 2841Hz +1dB, High Shelf 6678Hz +0.60dB
+    # Studio-grade Mastering Equalizer & Subtle Smartphone Recording Texture:
+    # 1. Low Cut 62Hz 24dB/oct (cascaded 2-pole highpass)
+    # 2. Bell 194Hz -2.33dB, Bell 437Hz -1.12dB, Bell 800Hz -1.45dB, Bell 2841Hz +1dB, High Shelf 6678Hz +0.60dB
+    # 3. Softened extreme highs (lowpass 12.5kHz)
+    # 4. Subtle harmonic density (asoftclip type=atan param=0.85)
+    # 5. Slight natural dynamic compression (acompressor ratio=2.2 makeup=1.2dB)
+    # 6. Very subtle low-level mic noise floor (-66dB pink noise bed)
+    # 7. Safe peak limiting (alimiter -1.0dB)
     MASTERING_EQ_FILTER = (
         "highpass=f=62:poles=2,highpass=f=62:poles=2,"
         "equalizer=f=194:width_type=q:width=1.0:gain=-2.33,"
@@ -364,16 +427,24 @@ class VoiceService:
         "highshelf=f=6678:gain=0.60"
     )
 
+    SUBTLE_TEXTURE_FILTER_COMPLEX = (
+        f"[0:a]{MASTERING_EQ_FILTER},"
+        "acompressor=threshold=-18dB:ratio=2.6:attack=12:release=90:makeup=8.0dB,"
+        "asoftclip=type=atan:param=1.10,"
+        "lowpass=f=12500[voice];"
+        "anoisesrc=color=pink:amplitude=0.007:sample_rate=48000,highpass=f=100,lowpass=f=7200[noise];"
+        "[voice][noise]amix=inputs=2:duration=first:dropout_transition=0:weights=1.0 1.0:normalize=0,"
+        "alimiter=limit=-1.0dB:attack=5:release=50[out]"
+    )
+
     @classmethod
     def apply_mastering_equalizer(cls, raw_audio: bytes) -> bytes:
         """
-        Fast studio-grade post-processing equalizer chain for all outgoing voice messages:
+        Fast studio-grade post-processing equalizer & subtle recording texture chain:
         - Low Cut 62HZ 24dB/oct (two cascaded 2-pole highpass filters at 62 Hz)
-        - Bell 194hz -2.33dB
-        - Bell 437hz -1.12dB
-        - Bell 800hz -1.45dB
-        - Bell 2841hz +1dB
-        - High Shelf 6678hz +0.60db
+        - Bell 194hz -2.33dB, Bell 437hz -1.12dB, Bell 800hz -1.45dB, Bell 2841hz +1dB, High Shelf 6678hz +0.60db
+        - Subtle smartphone recording texture: harmonic density (softclip), gentle compression,
+          softened extreme highs, very subtle low-level mic noise floor (-66dB pink bed) and limiter.
         Converts any audio stream to Telegram-native 48kHz mono libopus Ogg voice note.
         """
         if not raw_audio or len(raw_audio) < 10:
@@ -389,7 +460,8 @@ class VoiceService:
             ffmpeg_exe,
             "-y",
             "-i", in_path,
-            "-af", cls.MASTERING_EQ_FILTER,
+            "-filter_complex", cls.SUBTLE_TEXTURE_FILTER_COMPLEX,
+            "-map", "[out]",
             "-c:a", "libopus",
             "-b:a", "48k",
             "-vbr", "on",
@@ -634,19 +706,31 @@ class VoiceService:
             return False
 
     @classmethod
-    async def generate_voice_bytes(cls, text: str, voice_name: Optional[str] = None) -> bytes:
+    async def generate_voice_bytes(
+        cls,
+        text: str,
+        voice_name: Optional[str] = None,
+        chat_id: int = 0,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
+    ) -> bytes:
         """
         Generates ultra-realistic female voice audio bytes using ElevenLabs SDK with smartphone mic acoustics.
-        Produces natural Russian intonations, cadence, breathing and phone acoustic filter without foreign accent.
+        Routes speech through AdvancedProsodyController for authentic Russian intonations, stress, and cadence.
         """
-        spoken_text = cls.prepare_text_for_tts(text)
-        if not spoken_text:
-            spoken_text = text
+        from companion.services.prosody_controller import AdvancedProsodyController
+
+        prosody_obj = AdvancedProsodyController.process_for_tts(
+            text=text,
+            chat_id=chat_id,
+            chat_history=chat_history,
+            digits_to_words_fn=cls.digits_to_words,
+        )
+        spoken_text = prosody_obj.speech_text or text
 
         # 1. Primary: Official ElevenLabs SDK (eleven_multilingual_v2 with native Russian female voice)
         elevenlabs_key = settings.ELEVENLABS_API_KEY
         if elevenlabs_key:
-            voice_id = settings.ELEVENLABS_VOICE_ID or "oik5x6jBI6Xj6MPIciZU"
+            voice_id = settings.ELEVENLABS_VOICE_ID or "WmNeiBsHQpj7dNcrBhAX"
 
             def _synthesize_elevenlabs() -> Optional[bytes]:
                 try:
@@ -654,7 +738,12 @@ class VoiceService:
                     from elevenlabs import VoiceSettings
 
                     client = ElevenLabs(api_key=elevenlabs_key)
-                    dynamic_vs = cls.get_dynamic_voice_settings(spoken_text)
+                    dynamic_vs = VoiceSettings(
+                        stability=prosody_obj.stability,
+                        similarity_boost=prosody_obj.similarity_boost,
+                        style=prosody_obj.style,
+                        use_speaker_boost=True,
+                    )
                     models_to_try = ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5"]
                     for model in models_to_try:
                         try:
@@ -708,6 +797,7 @@ class VoiceService:
         caption: Optional[str] = None,
         reply_markup: Optional[dict] = None,
         business_connection_id: Optional[str] = None,
+        chat_history: Optional[List[Dict[str, Any]]] = None,
     ) -> bool:
         """
         Sends genuine voice note directly via Telegram Bot API sendVoice.
@@ -718,27 +808,39 @@ class VoiceService:
             return True
 
         try:
-            # 1. Realistic recording duration simulation: min 1.5s, max 4.0s
-            if text:
-                duration = min(max(len(text) / 22.0, 1.5), 4.0)
-                await cls.send_chat_action(bot_token, chat_id, "record_voice", business_connection_id)
-                await asyncio.sleep(duration)
-
             audio_bytes = None
             if voice_tag:
-                audio_bytes = cls.get_voice_asset(voice_tag)
+                raw_tag_bytes = cls.get_voice_asset(voice_tag)
+                if raw_tag_bytes:
+                    audio_bytes = cls.apply_mastering_equalizer(raw_tag_bytes)
+                if audio_bytes:
+                    await cls.send_chat_action(bot_token, chat_id, "record_voice", business_connection_id)
+                    await asyncio.sleep(random.uniform(0.8, 1.5))
 
             if not audio_bytes and text:
-                audio_bytes = await cls.generate_voice_bytes(text)
+                # Concurrent generation & record_voice action:
+                # The chat shows "записывает голосовое..." WHILE ElevenLabs is generating in parallel,
+                # eliminating 3-5 seconds of dead waiting latency!
+                action_task = asyncio.create_task(
+                    cls.send_chat_action(bot_token, chat_id, "record_voice", business_connection_id)
+                )
+                min_wait = min(max(len(text) / 35.0, 1.0), 2.5)
+                audio_task = asyncio.create_task(
+                    cls.generate_voice_bytes(
+                        text=text,
+                        chat_id=chat_id,
+                        chat_history=chat_history,
+                    )
+                )
+
+                # Wait for both generation and minimal realistic voice recording duration
+                await asyncio.gather(action_task, asyncio.sleep(min_wait))
+                audio_bytes = await audio_task
 
             if not audio_bytes:
                 if text:
                     return await cls.send_text_fallback(bot_token, chat_id, text, business_connection_id, reply_markup)
                 return False
-
-            # Fast studio mastering equalizer: Low Cut 62HZ 24dB/oct, bell 194hz -2.33dB,
-            # bell 437hz -1.12dB, bell 800hz -1.45dB, bell 2841hz +1dB, High Shelf 6678hz +0.60db
-            audio_bytes = cls.apply_mastering_equalizer(audio_bytes)
 
             url = f"https://api.telegram.org/bot{bot_token}/sendVoice"
             files = {"voice": ("voice.ogg", audio_bytes, "audio/ogg")}

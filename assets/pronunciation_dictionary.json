@@ -1,0 +1,471 @@
+{
+  "гс": {
+    "normalized": "гс",
+    "pronunciation": "гэ э́с",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "вк": {
+    "normalized": "вк",
+    "pronunciation": "вэ ка́",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "тг": {
+    "normalized": "тг",
+    "pronunciation": "тэ гэ́",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "лс": {
+    "normalized": "лс",
+    "pronunciation": "эл э́с",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "смс": {
+    "normalized": "смс",
+    "pronunciation": "эс эм э́с",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "смски": {
+    "normalized": "смски",
+    "pronunciation": "эс эм э́ски",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "смску": {
+    "normalized": "смску",
+    "pronunciation": "эс эм э́ску",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "инста": {
+    "normalized": "инста",
+    "pronunciation": "и́нста",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "инсте": {
+    "normalized": "инсте",
+    "pronunciation": "и́нсте",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "инсту": {
+    "normalized": "инсту",
+    "pronunciation": "и́нсту",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "инсты": {
+    "normalized": "инсты",
+    "pronunciation": "и́нсты",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "дайвинчик": {
+    "normalized": "дайвинчик",
+    "pronunciation": "дайви́нчик",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "дайвинчике": {
+    "normalized": "дайвинчике",
+    "pronunciation": "дайви́нчике",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "дайвинчика": {
+    "normalized": "дайвинчика",
+    "pronunciation": "дайви́нчика",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "дайвинчику": {
+    "normalized": "дайвинчику",
+    "pronunciation": "дайви́нчику",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "тиндер": {
+    "normalized": "тиндер",
+    "pronunciation": "ти́ндер",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "тиндере": {
+    "normalized": "тиндере",
+    "pronunciation": "ти́ндере",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "тиндеру": {
+    "normalized": "тиндеру",
+    "pronunciation": "ти́ндеру",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "войс": {
+    "normalized": "войс",
+    "pronunciation": "войс",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "войсы": {
+    "normalized": "войсы",
+    "pronunciation": "во́йсы",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "войсик": {
+    "normalized": "войсик",
+    "pronunciation": "во́йсик",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "кружок": {
+    "normalized": "кружок",
+    "pronunciation": "кружо́к",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "кружочек": {
+    "normalized": "кружочек",
+    "pronunciation": "кружо́чек",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "кружочки": {
+    "normalized": "кружочки",
+    "pronunciation": "кружо́чки",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "рилс": {
+    "normalized": "рилс",
+    "pronunciation": "рилс",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "рилсы": {
+    "normalized": "рилсы",
+    "pronunciation": "ри́лсы",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "вайб": {
+    "normalized": "вайб",
+    "pronunciation": "вайб",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "вайбовый": {
+    "normalized": "вайбовый",
+    "pronunciation": "вайбо́вый",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "вайбово": {
+    "normalized": "вайбово",
+    "pronunciation": "вайбо́во",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "кринж": {
+    "normalized": "кринж",
+    "pronunciation": "кринж",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "кринжовый": {
+    "normalized": "кринжовый",
+    "pronunciation": "кринжо́вый",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "кринжово": {
+    "normalized": "кринжово",
+    "pronunciation": "кринжо́во",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "краш": {
+    "normalized": "краш",
+    "pronunciation": "краш",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "крашиха": {
+    "normalized": "крашиха",
+    "pronunciation": "краши́ха",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "трек": {
+    "normalized": "трек",
+    "pronunciation": "трэк",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "треки": {
+    "normalized": "треки",
+    "pronunciation": "трэ́ки",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "трека": {
+    "normalized": "трека",
+    "pronunciation": "трэ́ка",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "чат": {
+    "normalized": "чат",
+    "pronunciation": "чат",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "чате": {
+    "normalized": "чате",
+    "pronunciation": "ча́те",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "чатик": {
+    "normalized": "чатик",
+    "pronunciation": "ча́тик",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "стикер": {
+    "normalized": "стикер",
+    "pronunciation": "сти́кер",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "стикеры": {
+    "normalized": "стикеры",
+    "pronunciation": "сти́керы",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "гифка": {
+    "normalized": "гифка",
+    "pronunciation": "ги́фка",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "гифку": {
+    "normalized": "гифку",
+    "pronunciation": "ги́фку",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "гифки": {
+    "normalized": "гифки",
+    "pronunciation": "ги́фки",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "кофе": {
+    "normalized": "кофе",
+    "pronunciation": "ко́фэ",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "кафе": {
+    "normalized": "кафе",
+    "pronunciation": "кафэ́",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "инфо": {
+    "normalized": "инфо",
+    "pronunciation": "и́нфо",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "занята": {
+    "normalized": "занята",
+    "pronunciation": "занята́",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "поняла": {
+    "normalized": "поняла",
+    "pronunciation": "поняла́",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "спала": {
+    "normalized": "спала",
+    "pronunciation": "спала́",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "ждала": {
+    "normalized": "ждала",
+    "pronunciation": "ждала́",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "брала": {
+    "normalized": "брала",
+    "pronunciation": "брала́",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "звонит": {
+    "normalized": "звонит",
+    "pronunciation": "звони́т",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "звонят": {
+    "normalized": "звонят",
+    "pronunciation": "звоня́т",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "позвонит": {
+    "normalized": "позвонит",
+    "pronunciation": "позвони́т",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "позвонят": {
+    "normalized": "позвонят",
+    "pronunciation": "позвоня́т",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "включит": {
+    "normalized": "включит",
+    "pronunciation": "включи́т",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "включат": {
+    "normalized": "включат",
+    "pronunciation": "включа́т",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "красивее": {
+    "normalized": "красивее",
+    "pronunciation": "краси́вее",
+    "stress": "2",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "облегчит": {
+    "normalized": "облегчит",
+    "pronunciation": "облегчи́т",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "договор": {
+    "normalized": "договор",
+    "pronunciation": "догово́р",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "договоры": {
+    "normalized": "договоры",
+    "pronunciation": "догово́ры",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "договора": {
+    "normalized": "договора",
+    "pronunciation": "догово́ры",
+    "stress": "3",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "торты": {
+    "normalized": "торты",
+    "pronunciation": "то́рты",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "банты": {
+    "normalized": "банты",
+    "pronunciation": "ба́нты",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  },
+  "шарфы": {
+    "normalized": "шарфы",
+    "pronunciation": "ша́рфы",
+    "stress": "1",
+    "ipa": null,
+    "confidence": 1.0
+  }
+}

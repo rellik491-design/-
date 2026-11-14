@@ -9,6 +9,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple
 
 from companion.services.typing_simulator import TypingSimulator
 from companion.bot.reply_validator import ReplyValidator
+from companion.services.sticker_service import StickerCatalogService
 
 logger = logging.getLogger(__name__)
 
@@ -22,66 +23,49 @@ STICKER_CATEGORIES: Dict[str, Dict[str, Any]] = {
         "description": "Funny reaction / laughing out loud",
         "pack_names": ["UtyaDuck", "HotCherry", "Animals"],
         "emoji_matches": ["😂", "🤣", "😆"],
-        "fallback_file_ids": [
-            "CAACAgIAAxkBAAEBK2lnJ8_laugh_curated_01",
-            "CAACAgIAAxkBAAEBK2pnJ8_laugh_curated_02",
-        ],
+        "fallback_file_ids": StickerCatalogService.CURATED_FALLBACKS["laugh"],
     },
     "surprise": {
         "description": "Shock / unexpected news / disbelief",
         "pack_names": ["UtyaDuck", "HotCherry"],
         "emoji_matches": ["😱", "😳", "😮", "😭"],
-        "fallback_file_ids": [
-            "CAACAgIAAxkBAAEBK2tnJ8_surprise_curated_01",
-        ],
+        "fallback_file_ids": StickerCatalogService.CURATED_FALLBACKS["surprise"],
     },
     "confusion": {
         "description": "Puzzled / questioning / suspicious",
         "pack_names": ["UtyaDuck", "HotCherry"],
         "emoji_matches": ["🤔", "🤨", "👀"],
-        "fallback_file_ids": [
-            "CAACAgIAAxkBAAEBK2xnJ8_confusion_curated_01",
-        ],
+        "fallback_file_ids": StickerCatalogService.CURATED_FALLBACKS["surprise"],
     },
     "facepalm": {
         "description": "Ridiculous statement / playful exasperation",
-        "pack_names": ["UtyaDuck", "HotCherry"],
-        "emoji_matches": ["🤦‍♀️", "🙄", "😅"],
-        "fallback_file_ids": [
-            "CAACAgIAAxkBAAEBK21nJ8_facepalm_curated_01",
-        ],
+        "pack_names": ["UtyaDuck", "HotCherry", "persik"],
+        "emoji_matches": ["🤦‍♀️", "🙄", "😅", "😖"],
+        "fallback_file_ids": StickerCatalogService.CURATED_FALLBACKS["facepalm"],
     },
     "cute": {
         "description": "Warm / shy / affectionate reaction",
-        "pack_names": ["UtyaDuck", "HotCherry"],
-        "emoji_matches": ["🥰", "😊", "🙈", "❤️"],
-        "fallback_file_ids": [
-            "CAACAgIAAxkBAAEBK25nJ8_cute_curated_01",
-        ],
+        "pack_names": ["UtyaDuck", "HotCherry", "persik"],
+        "emoji_matches": ["🥰", "😊", "🙈", "❤️", "😘"],
+        "fallback_file_ids": StickerCatalogService.CURATED_FALLBACKS["cute"],
     },
     "celebration": {
         "description": "Excitement / agreement / yay",
         "pack_names": ["UtyaDuck", "HotCherry"],
         "emoji_matches": ["🎉", "🥳", "✨"],
-        "fallback_file_ids": [
-            "CAACAgIAAxkBAAEBK29nJ8_celebration_curated_01",
-        ],
+        "fallback_file_ids": StickerCatalogService.CURATED_FALLBACKS["celebration"],
     },
     "teasing": {
         "description": "Playful / coy / smirking reaction",
         "pack_names": ["UtyaDuck", "HotCherry"],
         "emoji_matches": ["😏", "😉", "🙃"],
-        "fallback_file_ids": [
-            "CAACAgIAAxkBAAEBK3BnJ8_teasing_curated_01",
-        ],
+        "fallback_file_ids": StickerCatalogService.CURATED_FALLBACKS["teasing"],
     },
     "approval": {
         "description": "Thumbs up / deal / respect",
         "pack_names": ["UtyaDuck", "HotCherry"],
         "emoji_matches": ["👍", "👌", "😌"],
-        "fallback_file_ids": [
-            "CAACAgIAAxkBAAEBK3FnJ8_approval_curated_01",
-        ],
+        "fallback_file_ids": StickerCatalogService.CURATED_FALLBACKS["approval"],
     },
 }
 
@@ -135,26 +119,34 @@ class LaughterGenerator:
         """
         Determines whether laughter is appropriate and at what intensity:
         None | 'casual' | 'medium' | 'strong'.
+        Favors None (NO LAUGHTER) unless humor is genuinely present.
         """
+        inc_low = (incoming_text or "").lower()
         combined = f"{incoming_text or ''} {reply_text or ''}"
         low = combined.lower()
+
+        # Never laugh at callouts, complaints, questions or serious distress
+        if any(w in inc_low for w in ("зуб на зуб", "монстр", "ты бот", "хватит ржать", "почему смеешься", "болею", "умер", "устал")):
+            return None
+        if "?" in incoming_text and not any(e in incoming_text for e in ("😂", "🤣")):
+            return None
 
         # Strong triggers: caps laughter, multiple 😂/😭/🤣, or 'жесть'/'ор'/'угар'/'капец смешно'
         if (
             re.search(r"[А-ЯA-Z]{5,}", incoming_text or "")
             or any(e in combined for e in ("😂😂", "🤣", "😭"))
-            or any(w in low for w in ("вообще жесть", "ахахах", "угар", "ору", "ржу", "анекдот", "мем"))
+            or any(w in inc_low for w in ("вообще жесть", "ахахах", "угар", "ору", "ржу", "капец смешно"))
         ):
             return "strong"
 
         # Medium triggers: clear joke, funny situation, 😂
-        if any(e in combined for e in ("😂", "😅", "😆")) or any(
-            w in low for w in ("смешн", "шутк", "прикол", "забавн", "хаха", "ахах", "пхах", "funny", "lol", "lmao")
+        if any(e in incoming_text for e in ("😂", "😆")) or any(
+            w in inc_low for w in ("смешн", "шутк", "прикол", "ору", "хаха")
         ):
             return "medium"
 
-        # Mild / casual triggers
-        if any(w in low for w in ("улыбн", "ирони", "подкол", "дразн", "аха", "хах")):
+        # Mild triggers only if user specifically showed amusement
+        if any(w in inc_low for w in ("подкол", "дразн", "аха", "хах")):
             return "casual"
 
         return None
@@ -162,10 +154,12 @@ class LaughterGenerator:
     @classmethod
     def pick_laugh(
         cls,
-        intensity: str = "casual",
+        intensity: Optional[str] = None,
         contact_id: Optional[int] = None,
         lang: str = "ru",
     ) -> str:
+        if not intensity:
+            return ""
         pools = cls.LAUGH_POOLS_EN if lang == "en" else cls.LAUGH_POOLS_RU
         pool = pools.get(intensity, pools["casual"])
         key = contact_id or 0
@@ -188,7 +182,9 @@ class LaughterGenerator:
         contact_id: Optional[int] = None,
         lang: str = "ru",
     ) -> str:
-        intensity = cls.detect_humor_intensity(incoming_text, reply_text) or "casual"
+        intensity = cls.detect_humor_intensity(incoming_text, reply_text)
+        if not intensity:
+            return ""
         return cls.pick_laugh(intensity=intensity, contact_id=contact_id, lang=lang)
 
     @classmethod
@@ -199,13 +195,13 @@ class LaughterGenerator:
         contact_id: Optional[int] = None,
     ) -> str:
         """
-        Replaces short/repetitive laughs ('ах', 'аха', 'ахах', 'хах') in generated text
-        with natural, context-weighted variants of at least 5 characters.
+        Replaces short/repetitive laughs in generated text when humor is present,
+        or completely removes uncalled-for laughter when humor is absent.
         """
         if not text:
             return text
 
-        intensity = cls.detect_humor_intensity(incoming_text, text) or "casual"
+        intensity = cls.detect_humor_intensity(incoming_text, text)
 
         # Match standalone Russian laugh tokens of 2 to 12 chars (e.g. 'аха', 'ахах', 'хах', 'пхах', 'ахахах')
         laugh_pattern = re.compile(
@@ -223,6 +219,10 @@ class LaughterGenerator:
             if tok_low in ("мах", "шах", "пах", "бах", "тах", "вах", "ага"):
                 return token
 
+            if not intensity:
+                # Strip unprompted laughter
+                return ""
+
             is_upper = token.isupper() and len(token) >= 4
             eff_intensity = "strong" if is_upper else intensity
             replacement = cls.pick_laugh(
@@ -230,12 +230,12 @@ class LaughterGenerator:
                 contact_id=contact_id,
                 lang="ru",
             )
-            # Ensure minimum 5 characters
-            if len(replacement) < 5:
-                replacement = "ахаха"
             return replacement
 
-        return laugh_pattern.sub(_replace_laugh, text)
+        cleaned = laugh_pattern.sub(_replace_laugh, text)
+        cleaned = re.sub(r"^\s*[,!?.\s—–-]+\s*", "", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        return cleaned
 
 
 # ==============================================================================
@@ -442,8 +442,9 @@ class EmojiAndStickerSelector:
         turn_idx = cls._turn_counter_by_contact.get(cid, 0) + 1
         cls._turn_counter_by_contact[cid] = turn_idx
 
-        last_sticker_turn = cls._last_sticker_turn_by_contact.get(cid, -10)
-        if not explicit_category and (turn_idx - last_sticker_turn) < 5:
+        last_sticker_turn = cls._last_sticker_turn_by_contact.get(cid, -20)
+        # Enforce strict sparse cooldown of at least 15 turns between stickers
+        if not explicit_category and (turn_idx - last_sticker_turn) < 15:
             return None
 
         category = explicit_category if explicit_category in STICKER_CATEGORIES else cls.detect_sticker_category(incoming_text, reply_text)
@@ -451,13 +452,14 @@ class EmojiAndStickerSelector:
             return None
 
         rand = rng if rng is not None else random
-        if not explicit_category and rand.random() > probability:
+        # Sparse natural sticker frequency: ~5% probability
+        eff_prob = min(probability, 0.05) if not explicit_category else 1.0
+        if not explicit_category and rand.random() > eff_prob:
             return None
 
         cls._last_sticker_turn_by_contact[cid] = turn_idx
         cat_info = STICKER_CATEGORIES[category]
-        cached_ids = cls._resolved_pack_stickers.get(category) or cat_info["fallback_file_ids"]
-        file_id = random.choice(cached_ids)
+        file_id = StickerCatalogService.get_sticker(category) or random.choice(cat_info["fallback_file_ids"])
         return {
             "category": category,
             "file_id": file_id,

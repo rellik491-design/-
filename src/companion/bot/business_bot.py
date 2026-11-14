@@ -374,7 +374,12 @@ class BusinessChatBot:
             chat_id, sender_id, connection_id, text[:60], is_voice
         )
 
-        # 1. Verify business connection and active subscription
+        # 1. Verify health status and active subscription
+        from companion.services.health_manager import HealthManager
+        if HealthManager.is_paused():
+            logger.warning("[BUSINESS_BOT] System in SAFE PAUSED state (%s). Suppressing message processing for chat %s", HealthManager.get_paused_reason(), chat_id)
+            return {"action": "paused_due_to_health", "reason": HealthManager.get_paused_reason()}
+
         is_valid = await InviteService.is_business_connection_valid(session, connection_id, now=now)
         if not is_valid:
             logger.info("Business connection %s invalid or subscription expired", connection_id)
@@ -455,7 +460,8 @@ class BusinessChatBot:
 
         if batch_voice_durations and not is_mock:
             max_voice_len = max(batch_voice_durations)
-            listen_pause = min(max(float(max_voice_len), 1.2), 5.0)
+            # Snappy, natural listening simulation (0.8s - 2.0s) so interlocutor feels instant responsiveness
+            listen_pause = min(max(float(max_voice_len) * 0.35, 0.8), 2.0)
             logger.info(
                 "[CHAT %s] Simulating listening to voice note (%ds) for %.1fs before AI response",
                 chat_id, max_voice_len, listen_pause
@@ -592,8 +598,6 @@ class BusinessChatBot:
                 # 2. Fast, responsive delivery of the planned batch response (no 15–45s unread stall after AI!)
                 if voice_tag:
                     await cls.send_business_chat_action(token, connection_id, chat_id, "record_voice")
-                    if not is_mock:
-                        await asyncio.sleep(random.uniform(1.0, 2.0))
                     await VoiceService.send_telegram_voice_note(
                         bot_token=token,
                         chat_id=chat_id,
@@ -603,9 +607,6 @@ class BusinessChatBot:
                 elif VoiceService.should_send_voice(user_message=combined_transcribed, bot_reply=reply_text, is_incoming_voice=is_voice):
                     clean_voice = reply_text.replace("||", " ")
                     voice_text = VoiceService.shorten_for_voice(clean_voice, max_chars=180)
-                    await cls.send_business_chat_action(token, connection_id, chat_id, "record_voice")
-                    if not is_mock:
-                        await asyncio.sleep(random.uniform(1.2, 2.2))
                     sent = await VoiceService.send_telegram_voice_note(
                         bot_token=token,
                         chat_id=chat_id,
@@ -646,6 +647,29 @@ class BusinessChatBot:
                         await cls.send_business_sticker(
                             token, connection_id, chat_id, planned_sticker["file_id"]
                         )
+
+                # Native Telegram Reactions (Section 34: Bot API 7.0+ setMessageReaction)
+                from companion.services.reaction_service import TelegramReactionService
+                sug_reaction = res.get("suggested_reaction")
+                if sug_reaction and not is_mock:
+                    turn_cnt = getattr(res.get("contact"), "total_messages_out", 0) or 1
+                    if TelegramReactionService.can_react(int(chat_id), turn_cnt):
+                        target_msg_id = None
+                        if incoming_batch:
+                            for b in reversed(incoming_batch):
+                                target_msg_id = b.get("telegram_message_id") or b.get("message_id")
+                                if target_msg_id:
+                                    break
+                        elif message_id:
+                            target_msg_id = message_id
+                        if target_msg_id:
+                            await TelegramReactionService.set_message_reaction(
+                                bot_token=token,
+                                chat_id=int(chat_id),
+                                message_id=int(target_msg_id),
+                                reaction_emoji=sug_reaction,
+                            )
+                            TelegramReactionService.record_reaction_sent(int(chat_id), turn_cnt)
 
                 telegram_send_s = time.perf_counter() - t_send_start
                 if isinstance(res.get("metrics"), dict):
@@ -690,25 +714,30 @@ class BusinessChatBot:
             if reply_params:
                 payload["reply_parameters"] = reply_params
 
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                res = await client.post(url, json=payload)
-                if res.status_code == 200:
-                    return True
-                # If Telegram returns 400 Bad Request due to reply target, gracefully fallback to sending without reply
-                if res.status_code == 400 and "reply_parameters" in payload:
-                    logger.warning("Telegram rejected reply_parameters for chat %s (%s). Retrying without reply target.", chat_id, res.text)
-                    payload.pop("reply_parameters", None)
-                    payload.pop("reply_to_message_id", None)
-                    payload.pop("allow_sending_without_reply", None)
-                    retry_res = await client.post(url, json=payload)
-                    return retry_res.status_code == 200
+        for attempt in range(2):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    res = await client.post(url, json=payload)
+                    if res.status_code == 200:
+                        return True
+                    # If Telegram returns 400 Bad Request due to reply target, gracefully fallback to sending without reply
+                    if res.status_code == 400 and "reply_parameters" in payload:
+                        logger.warning("Telegram rejected reply_parameters for chat %s (%s). Retrying without reply target.", chat_id, res.text)
+                        payload.pop("reply_parameters", None)
+                        payload.pop("reply_to_message_id", None)
+                        payload.pop("allow_sending_without_reply", None)
+                        retry_res = await client.post(url, json=payload)
+                        return retry_res.status_code == 200
 
-                logger.error("Failed to send business message in chat %s: HTTP %s - %s", chat_id, res.status_code, res.text)
-                return False
-        except Exception as e:
-            logger.error("Exception in send_business_message in chat %s: %s", chat_id, e)
-            return False
+                    logger.error("Failed to send business message in chat %s: HTTP %s - %s", chat_id, res.status_code, res.text)
+                    return False
+            except Exception as e:
+                logger.error("Exception in send_business_message in chat %s (attempt %d): %r", chat_id, attempt + 1, e)
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+                else:
+                    return False
+        return False
 
     @staticmethod
     async def send_business_sticker(

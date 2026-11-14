@@ -81,8 +81,8 @@ class TypingSimulator:
 
         total = base_delay + pure_typing + punct_delay
 
-        # Natural bounded range: minimum 0.5s, maximum 14.0s
-        total = max(0.45, min(total, 14.0))
+        # Natural bounded range: minimum 0.45s, maximum 3.5s for fast, responsive typing
+        total = max(0.45, min(total, 3.5))
         return round(total, 2)
 
     @classmethod

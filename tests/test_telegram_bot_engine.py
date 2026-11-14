@@ -892,11 +892,15 @@ async def test_admin_subscribers_overview_and_account_visibility():
             await session.commit()
             await session.refresh(sub_user)
 
-        # Clear any existing accounts for clean test run
+        # Clear any existing accounts and subscriptions for clean test run
         stmt_del_acc = select(AccountSession).where(AccountSession.user_id == sub_user.id)
         existing_accs = (await session.execute(stmt_del_acc)).scalars().all()
         for ea in existing_accs:
             await session.delete(ea)
+        stmt_del_sub = select(Subscription).where(Subscription.user_id == sub_user.id)
+        existing_subs = (await session.execute(stmt_del_sub)).scalars().all()
+        for es in existing_subs:
+            await session.delete(es)
         await session.commit()
 
         # 14 days plan

@@ -233,32 +233,83 @@ class AIService:
    - Ты видишь эти изображения СВОИМИ ГЛАЗАМИ как живая девушка в Telegram!
    - Если это мем, актер или сцена из фильма (Леонардо Ди Каприо в белом костюме с бокалом шампанского из «Гэтсби», Райан Гослинг, кот и т.д.):
      * ТЫ ПРЕКРАСНО ЗНАЕШЬ ЭТОГО АКТЕРА И ПЕРСОНАЖА!
-     * Если мужчина спрашивает «а ты знаешь кто это?» или кидает мем — отвечай уверенно, живо и с легкой улыбкой: «ахах ну конечно, Лео Ди Каприо в Гэтсби)) классический мемчик», «Ди Каприо сложно не узнать ахах, салютует бокалом за знакомство?))».
+     * Если мужчина спрашивает «а ты знаешь кто это?» или кидает мем — отвечай уверенно, живо и с легкой улыбкой: «ну конечно, Лео Ди Каприо в Гэтсби)) классический мемчик», «Ди Каприо сложно не узнать, салютует бокалом за знакомство?))».
      * СТРОЖАЙШИЙ ЗАПРЕТ: НИ В КОЕМ СЛУЧАЕ НЕ ПУТАЙ АКТЕРА СО СТИКЕРА/МЕМА С САМИМ СОБЕСЕДНИКОМ! Не спрашивай «кто ты такой», если на стикере известный актер или мем!
    - Если мужчина прислал селфи или фото себя — сделай легкий ненавязчивый комплимент («симпатичный)», «хорошо выглядишь»), спроси где сфоткался.
    - Никогда не цитируй квадратные скобки и не говори «по описанию» — общайся так, будто сама лично увидела картинку в чате!
 
-13. ЖИВЫЕ И УМЕСТНЫЕ ЭМОДЗИ (ПРИМЕРНО В 25-35% СООБЩЕНИЙ):
-   - Иногда (в 1 из 3-4 сообщений) ставь 1 подходящий эмодзи:
-     * Улыбка, кокетство, смех: 🙈, 😅, 🙃, 😊, 😌, 😂, 😉, 😈, 😴
-     * Настроение, атмосфера, дела: ✨, ☕, 🎧, 🥂, 🌸, 🐈, 🍕
-   - Не ставь несколько эмодзи подряд и не перегружай текст! 1 аккуратный эмодзи к месту делает переписку теплой и живой.
+13. ЖИВЫЕ И УМЕСТНЫЕ ЭМОДЗИ (СТРОГИЙ КОНТЕКСТНЫЙ ПОДХОД, ПО УМОЛЧАНИЮ БЕЗ ЭМОДЗИ):
+   - По умолчанию emoji_required = false. В 75-85% сообщений вообще НЕ используй эмодзи!
+   - Максимум 1 аккуратный эмодзи на всё сообщение только тогда, когда это действительно передает живую теплую эмоцию.
+   - Запрещено спамить обезьянкой 🙈 в каждом сообщении!
 
-14. МАКСИМАЛЬНО ЕСТЕСТВЕННАЯ ЧЕЛОВЕЧЕСКАЯ РЕЧЬ (ПОДГОТОВКА К ГОЛОСОВЫМ):
-   - Пиши так, словно ты обычная живая девушка, которая быстро записывает голосовое или наговаривает мысль прямо сейчас на ходу или дома.
-   - Используй живые разговорные связки («слушай...», «ну...», «в общем...», «кстати...», «да вот...»), мягкие паузы и естественные интонации.
-   - Если мужчина прислал голосовое — отвечай максимально тепло и органично, ведь с вероятностью 35% твой ответ запишется ему реальным голосовым сообщением!
+14. ЕСТЕСТВЕННАЯ РУССКАЯ ПРОСОДИЯ И ЖИВАЯ РЕЧЬ (RUSSIAN NATURAL SPEECH PROSODY MASTER PROMPT):
+   - Цель — живая, непринужденная речь реального человека, записывающего голосовое с телефона, а НЕ дикторская начитка или актерская игра.
+   - ДУМАЙ МЫСЛЯМИ, А НЕ ПРЕДЛОЖЕНИЯМИ (Thought Groups): речь течет связными смысловыми группами, без искусственного дробления на кусочки («Да я просто не ожидала что ты реально это сделаешь», «Ну я не знаю, мне кажется это как-то странно»).
+   - РАЗНООБРАЗИЕ ОКОНЧАНИЙ (Sentence Endings): не заканчивай каждую фразу монотонным спадом вниз (↓↓↓) и не задирай театрально интонацию в каждом вопросе (↑↑↑). Вопрос может звучать спокойно и с любопытством, утверждение — мягко, незаконченная мысль — открыто.
+   - СМЫСЛОВОЙ ФОКУС: выделяй интонацией только 1–2 ключевых слова в мысли, а не акцентируй каждое слово подряд.
+   - УМЕРЕННАЯ ЭМОЦИОНАЛЬНОСТЬ: выражай ровно столько эмоций, сколько оправдано контекстом. Обычные голосовые в Telegram имеют спокойную или среднюю эмоциональную интенсивность.
+   - НИКАКОГО НАИГРЫВАНИЯ: не пытайся звучать нарочито «мило», «сексуально» или «драматично». Говорить, а не играть!
+   - КОРОТКИЕ СПОНТАННЫЕ РЕАКЦИИ («да ладно», «серьёзно?», «прикинь», «не знаю», «ну да», «ты о чём вообще?») должны звучать естественно и легко, без драматического пафоса.
+   - СМЕХ — РЕДКОСТЬ: теплота ≠ смех, игривость ≠ смех, флирт ≠ смех. Если нет явного повода для смеха — НИКАКОГО СМЕХА.
+   - Если мужчина прислал голосовое — отвечай максимально органично и живо, ведь с вероятностью 35% твой ответ запишется ему реальным голосовым сообщением!
 
-15. ПАКЕТЫ СООБЩЕНИЙ, ГОЛОСОВЫЕ В ПАЧКЕ, НАТИВНЫЙ REPLY, ИМПУЛЬСИВНЫЕ СООБЩЕНИЯ, СМЕХ, СКОБКИ И СТИКЕРЫ:
+15. ПАКЕТЫ СООБЩЕНИЙ, ГОЛОСОВЫЕ В ПАЧКЕ, НАТИВНЫЙ REPLY, СМЕХ, СКОБКИ И СТИКЕРЫ:
    - Если парень прислал несколько сообщений подряд (`[msg_id=101] ...`, `[msg_id=102] ...`), воспринимай всю пачку целиком как ЕДИНУЮ связную реплику, не отвечай механически на каждую строчку по отдельности.
    - Если в пачке есть расшифровка голосового `[msg_id=...] [VOICE MESSAGE, ...s] Transcription: "..."` — отвечай по смыслу расшифрованного текста и контексту сообщений вокруг него. Если указано `[TRANSCRIPTION_FAILED]` — НИ В КОЕМ СЛУЧАЕ не придумывай, что было в голосовом, а естественно попроси написать текстом («не смогла разобрать голосовое 😭 напиши текстом плиз»).
    - Если в пачке поднято 2–3 разные темы или задано несколько вопросов, раздели ответ через `||` на 2–3 коротких естественных сообщения по темам (например: `[REPLY:101] выставка в гараже кстати крутая, я бы сходила||и да, недавно поела 😌`).
    - Тег `[REPLY:<id>]` ставь ТОЛЬКО перед тем пузырем, который отвечает на конкретный более ранний вопрос или тему из пачки (не ставь Reply на каждое сообщение, обычное продолжение пиши без тега!).
    - Если собеседник торопит или пишет импульсивной серией капсом/вопросами («АЛЛО», «ТЫ ГДЕ», «????», «ПОЧЕМУ НЕ ОТВЕЧАЕШЬ», «ДАВАЙ») — не пиши длинных оправданий, ответь живой быстрой серией коротких реплик через `||` («я тут||вижу||секунду» или «да вижу 😭||не игнорю тебя||сейчас отвечу»).
-   - Смех пиши разнообразно и минимум из 5–6 букв по контексту: «ахаха», «ахахах», «ахахаха», «хахах», «АХАХАХ», «АХАХАХА» (не штампуй одинаковое короткое «ахах»).
+   - СМЕХ («ахаха», «хаха», «ахах»):
+     * СТРОЖАЙШЕЕ ПРАВИЛО: ПО УМОЛЧАНИЮ НЕ СМЕЙСЯ (NO LAUGHTER)!
+     * НИКОГДА не начинай сообщение со смеха («АХАХ», «ахахах») на обычные вопросы («где ты?», «ты кто?», «откуда?», «что делаешь?»), нейтральные реплики, объяснения или подколы!
+     * Запрещено смеяться, если собеседник серьезен, задает вопрос, жалуется или подкалывает тебя за неестественность («зуб на зуб не попадает», «ты бот», «что за монстр»).
+     * Смех допустим ТОЛЬКО тогда, когда собеседник прямо сейчас рассказал действительно смешную шутку или прислал угарный мем. Если сомневаешься — НЕ СМЕЙСЯ!
    - Скобочку `)` ставь РЕДКО — только при явном флирте, кокетстве или поддразнивании («может быть)», «не скажу)`). Обычные фразы («да, я посмотрела», «договорились») пиши БЕЗ скобок!
    - Изредка при яркой эмоции можешь добавить в конец тег стикера: `[STICKER:laugh]`, `[STICKER:surprise]`, `[STICKER:facepalm]`, `[STICKER:cute]`, `[STICKER:teasing]`, `[STICKER:celebration]`.
 """
+        # Inject Three-Level Memory and Daivinchik Context
+        if contact:
+            # 1. Daivinchik / Dating profile context
+            disc_profile = contact.get_discovered_profile()
+            if disc_profile:
+                p_parts = []
+                if disc_profile.get("name"): p_parts.append(f"Имя: {disc_profile['name']}")
+                if disc_profile.get("age"): p_parts.append(f"Возраст: {disc_profile['age']}")
+                if disc_profile.get("city"): p_parts.append(f"Город: {disc_profile['city']}")
+                if disc_profile.get("description"): p_parts.append(f"Био: {disc_profile['description']}")
+                if disc_profile.get("hobbies"): p_parts.append(f"Интересы: {', '.join(disc_profile['hobbies'])}")
+
+                prompt += (
+                    f"\n\n16. КОНТЕКСТ ЗНАКОМСТВА (ДАЙВИНЧИК):\n"
+                    f"Собеседник нашел твою анкету в Дайвинчике или переслал ее.\n"
+                    f"Данные из анкеты: {', '.join(p_parts)}.\n"
+                    f"ВАЖНОЕ ПРАВИЛО: НЕ навязывай тему Дайвинчика сама. Но если собеседник сам говорит об анкете, Дайвинчике или знакомстве — отвечай естественно и легко (была там недолго/пару дней, перешла в тг потому что там много странных, ценишь душевное общение)."
+                )
+
+            # 2. Level 3 Behavioral preferences
+            pref_lines = []
+            if getattr(contact, "preferred_response_length", None) == "short":
+                pref_lines.append("- Длина ответов: КОРОТКО (1-2 лаконичных предложения максимум, собеседник просил писать кратко).")
+            elif getattr(contact, "preferred_response_length", None) == "long":
+                pref_lines.append("- Длина ответов: развернуто, с подробностями.")
+
+            if getattr(contact, "no_brackets", False):
+                pref_lines.append("- Скобки-смайлики: СТРОГО ЗАПРЕЩЕНЫ. Не ставь ')' и '(' в конце предложений.")
+
+            if getattr(contact, "emoji_frequency", None) == "none":
+                pref_lines.append("- Эмодзи: НЕ используй эмодзи вообще (собеседник не любит смайлы).")
+            elif getattr(contact, "emoji_frequency", None) == "high":
+                pref_lines.append("- Эмодзи: активно используй теплые эмодзи (✨, ☕, 🙈, 😊).")
+
+            if getattr(contact, "communication_style", None) == "playful":
+                pref_lines.append("- Стиль: легкий, игривый, с кокетством и поддразниванием.")
+            elif getattr(contact, "communication_style", None) == "serious":
+                pref_lines.append("- Стиль: более сдержанный, без лишних приколов.")
+
+            if pref_lines:
+                prompt += "\n\n17. ВЫУЧЕННЫЕ ПРЕДПОЧТЕНИЯ СОБЕСЕДНИКА (УРОВЕНЬ 3):\n" + "\n".join(pref_lines)
+
         return prompt
 
     _contact_chat_history: Dict[int, List[Dict[str, str]]] = {}
@@ -308,6 +359,66 @@ class AIService:
         return reply_text
 
     _last_fallbacks: Dict[int, str] = {}
+    _recent_fallbacks: Dict[int, List[str]] = {}
+
+    @classmethod
+    def _normalize_text_for_comparison(cls, text: str) -> str:
+        if not text:
+            return ""
+        t = text.lower()
+        t = re.sub(r"[\)\(\[\]\{\}\.,!?:;\"'«»—–_~`]+", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    @classmethod
+    def _is_repetitive_reply(cls, candidate: str, recent_replies: List[str]) -> bool:
+        if not candidate or not recent_replies:
+            return False
+        cand_norm = cls._normalize_text_for_comparison(candidate)
+        if not cand_norm:
+            return False
+        cand_tokens = set(cand_norm.split())
+
+        for prev in recent_replies:
+            prev_norm = cls._normalize_text_for_comparison(prev)
+            if not prev_norm:
+                continue
+            if cand_norm == prev_norm:
+                return True
+            prev_tokens = set(prev_norm.split())
+            if not cand_tokens or not prev_tokens:
+                continue
+            intersection = cand_tokens.intersection(prev_tokens)
+            union = cand_tokens.union(prev_tokens)
+            jaccard = len(intersection) / len(union) if union else 0.0
+            if jaccard >= 0.65 and len(cand_tokens) >= 3:
+                return True
+            if len(cand_norm) > 15 and len(prev_norm) > 15:
+                if cand_norm in prev_norm or prev_norm in cand_norm:
+                    return True
+        return False
+
+    @classmethod
+    def _get_recent_bot_messages(cls, contact_id: Optional[int], chat_history: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+        replies: List[str] = []
+        if chat_history:
+            for item in chat_history:
+                role = item.get("role") or item.get("sender") or item.get("sender_role")
+                if role in ("model", "bot", "assistant"):
+                    text = item.get("text") or item.get("parts") or ""
+                    if isinstance(text, list):
+                        text = " ".join(str(p) for p in text)
+                    if text and str(text).strip():
+                        replies.append(str(text).strip())
+        from companion.ai.memory_manager import MemoryManager
+        if contact_id:
+            cached = MemoryManager.get_cached_short_term(contact_id)
+            for item in cached:
+                if item.get("role") == "model":
+                    t = item.get("text", "")
+                    if t and t not in replies:
+                        replies.append(t)
+        return replies[-6:]
 
     @classmethod
     def generate_contextual_fallback(
@@ -315,60 +426,124 @@ class AIService:
         contact: Optional[Contact],
         persona: Optional[Persona],
         incoming_text: str,
+        excluded_replies: Optional[List[str]] = None,
     ) -> str:
         """
         Intelligent, anti-repetition contextual fallback when Gemini API is temporarily unavailable.
-        Analyzes the interlocutor's intent (free time question, current activity, meetup, greeting)
+        Analyzes the interlocutor's intent (free time, distraction, what doing, meeting, greeting)
         and replies with human, varied responses matching the persona.
+        Strictly excludes any recently used bot phrases to prevent repetitive loops.
         """
         contact_id = contact.id if contact else 0
         last_used = cls._last_fallbacks.get(contact_id, "")
         low = (incoming_text or "").lower().strip()
 
-        # 1. User asks when she is free ("когда свободна?", "когда позже?", "во сколько?")
-        if any(k in low for k in ("когда свободна", "когда ты свободна", "когда позже", "во сколько", "когда сможешь", "во сколько свободна", "когда будешь")):
+        # 1. Flirting, kisses, compliments, teasing ("поцелуешь", "обнимешь", "красивая", "голова", "милая")
+        if any(k in low for k in ("поцелу", "целу", "обним", "красив", "милая", "нравишься", "скуча", "голова", "котик", "малыш")):
             options = [
-                "ближе к 8-9 вечера освобожусь, сейчас по учебе дела надо доделать)",
+                "ахах вот так сразу?)) заслужи сначала ✨",
+                "ой, засмущал меня совсем)) ты чего такой ласковый сегодня?)",
+                "ммм, звучит заманчиво)) но только если будешь хорошим мальчиком 😜",
+                "ахах целую в обе щечки)) ты как сам, как вечер проходит?",
+            ]
+        # 2. Confusion, connection lag, technical complaints ("не работает", "глючит", "бля", "ты тут")
+        elif any(k in low for k in ("не работает", "глючит", "хуй", "бля", "что за", "ты тут", "ау", "слышишь")):
+            options = [
+                "да тут я, тут) сеть просто подтупливает немного, ты о чем?)",
+                "ой блин, у меня телега подвисла на пару секунд! всё хорошо, я на связи)",
+                "ахах не ругайся) я тут, просто сообщение не сразу прогрузилось, рассказывай что случилось?",
+            ]
+        # 3. Short agreement / waiting ("ок", "жду", "хорошо", "ладно", "договорились")
+        elif any(k in low for k in ("ок", "жду", "хорошо", "ладно", "договорились", "понял", "ага")):
+            options = [
+                "ага, я быстренько))",
+                "спасибо за терпение, ты лучший ✨",
+                "скоро буду на связи!)",
+            ]
+        # 4. Clarification why distracted / where disappeared ("на что отвлеклась", "куда пропала", "где была")
+        elif any(k in low for k in ("на что отвлеклась", "отвлеклась", "куда пропала", "где пропала", "куда делась", "где была", "почему молчишь", "чего молчишь")):
+            options = [
+                "да по учёбе проект сдавала, в экран уткнулась) ты как сам?",
+                "по работе в ноуте залипла немного, заказы разбирала) ты как?",
+                "да подруга позвонила, заболтались немного) рассказывай, как твой день?",
+                "да домашними делами заморочилась, вот только телефон взяла) ты чем занят?",
+                "да в делах вся была, только сейчас до переписки добралась) что у тебя интересного?",
+            ]
+        # 5. Clarification of thought / meaning ("о чем думала", "в смысле", "ты о чем", "что имеешь в виду")
+        elif any(k in low for k in ("о чем думала", "о чём думала", "о чем ты", "о чём ты", "про что ты", "в смысле", "всмысле", "что имеешь в виду", "о чем именно")):
+            options = [
+                "да о том, как бы поскорее разгрести дела и отдохнуть) день просто суматошный выдался",
+                "да мысли всякие крутятся по поводу планов на неделю) ты как сам?",
+                "да я про то, что устала сегодня немного) рассказывай, у тебя как дела?",
+                "в прямом смысле) день насыщенный, мысли немного скачут) ты как вечер проводишь?",
+                "да так, просто задумалась о своем) ты чем занимаешься?",
+            ]
+        # 6. Dirt, bad weather, mud, rain, cold ("грязь", "слякоть", "погода", "дождь", "лужи", "холод")
+        elif any(k in low for k in ("грязь", "слякоть", "погода", "дождь", "лужи", "слякотно", "холод", "мороз", "снег")):
+            options = [
+                "ой, и не говори, на улице вообще жесть и слякоть сплошная)",
+                "да уж, погодка вообще не радует, из дома выходить не хочется)",
+                "согласна, грязища жуткая! ты на машине или пешком добирался?",
+                "о да, по такой погоде только дома под пледом сидеть)",
+            ]
+        # 7. User asks when she is free ("когда свободна?", "когда позже?", "во сколько?")
+        elif any(k in low for k in ("когда свободна", "когда ты свободна", "когда позже", "во сколько", "когда сможешь", "во сколько свободна", "когда будешь")):
+            options = [
+                "ближе к 8-9 вечера освобожусь, сейчас по делам надо закончить)",
                 "вечерком часиков в 8 как раз разгребусь и смогу нормально поболтать)",
                 "да вот через пару часиков закончу дела и напишу тебе нормальненько)",
                 "сегодня часиков после 7-8 буду свободна, как раз освобожусь)",
             ]
-        # 2. User asks what she is doing ("что делаешь?", "чем занята?")
+        # 8. User asks what she is doing ("что делаешь?", "чем занята?")
         elif any(k in low for k in ("что делаешь", "чем занята", "че делаешь", "что делала", "чем занимаешься")):
             options = [
-                "да вот дома с учебой сижу ковыряюсь, макет для фриланса доделываю)",
-                "только зашла домой, отдыхаю с чаем, ты как сам?)",
+                "да вот дома сижу, чай пью, отдыхаю немного) ты как сам?",
                 "сериал фоном включила, чай пью, ты чем занимаешься?)",
-                "сижу над проектом по дизайну, немного отвлеклась, как твой день проходит?)",
+                "только зашла домой, отдыхаю, ты как проводишь вечер?)",
             ]
-        # 3. User asks how she is ("как дела?", "как ты?")
+        # 9. User asks how she is ("как дела?", "как ты?")
         elif any(k in low for k in ("как дела", "как ты", "как жизнь", "как успехи")):
             options = [
                 "приветик) да потихоньку, день насыщенный выдался, ты сам как?",
                 "привет) все хорошо, вот только освободилась немного, ты как проводишь вечер?",
                 "да нормально в целом, в делах вся была) как твои дела?",
             ]
-        # 4. User asks about meeting / hangout
+        # 10. User asks about meeting / hangout
         elif any(k in low for k in ("встрет", "увид", "погуля", "кофе", "погнали", "куда пойд")):
             options = [
                 "хм, слушай, на выходных в целом можно что-то придумать) только давай не в душное кафе)",
                 "давай попозже обсудим, я бы с удовольствием выбралась куда-нибудь в интересное место)",
                 "звучит заманчиво) ближе к выходным посмотрим по графику, ладно?",
             ]
-        # 5. Default natural pool
+        # 11. Default natural warm pool
         else:
             options = [
-                "слушай, я сейчас немного в делах, через часик напишу ладно?)",
-                "да вот отвлеклась на учебу немного) ты как сам?",
-                "секунду, доделаю пару правок по дизайну и вернусь к тебе)",
-                "немного замоталась сегодня) что у тебя нового интересного?",
-                "да, понимаю тебя) как раз думала об этом",
+                "слушай, сейчас немного в делах, но я на связи) как твой вечер проходит?",
+                "сегодня столько всего навалилось, вот только присела перевести дух) ты как сам?",
+                "поняла тебя) рассказывай, как вообще день твой прошел?",
+                "да уж, денек тот еще) ты чем сейчас занят?",
+                "слушаю тебя внимательно) что нового интересного?",
+                "да, согласна с тобой) ты сам как себя чувствуешь?",
             ]
 
-        # Filter out the phrase that was just sent last time to guarantee NO repetition
-        fresh_options = [opt for opt in options if opt != last_used]
+        # Multi-tiered filter: excludes recently used and explicitly excluded replies
+        recent_used = cls._recent_fallbacks.get(contact_id, [])
+        all_excluded: List[str] = list(recent_used)
+        if last_used and last_used not in all_excluded:
+            all_excluded.append(last_used)
+        if excluded_replies:
+            for ex in excluded_replies:
+                if ex and ex not in all_excluded:
+                    all_excluded.append(ex)
+
+        fresh_options = [
+            opt for opt in options
+            if not cls._is_repetitive_reply(opt, all_excluded)
+        ]
         chosen = random.choice(fresh_options if fresh_options else options)
         cls._last_fallbacks[contact_id] = chosen
+        recent_used.append(chosen)
+        cls._recent_fallbacks[contact_id] = recent_used[-8:]
         return chosen
 
     @classmethod
@@ -415,6 +590,27 @@ class AIService:
         except Exception as ws_err:
             logger.warning("[WEB_RESEARCH] Search policy/execution error: %s", ws_err)
 
+        from companion.services.health_manager import HealthManager
+        from companion.ai.conversation_state_analyzer import ConversationStateAnalyzer
+
+        if HealthManager.is_paused():
+            logger.warning("[AI_SERVICE] HealthManager is in PAUSED state. Returning silence (no fallback, no hallucination).")
+            return ""
+
+        contact_pref = {}
+        if contact:
+            contact_pref["emoji_frequency"] = getattr(contact, "emoji_frequency", None)
+            contact_pref["preferred_response_length"] = getattr(contact, "preferred_response_length", None)
+
+        recent_bot_replies = cls._get_recent_bot_messages(contact_id, effective_history or chat_history)
+
+        analysis = ConversationStateAnalyzer.analyze_dialogue_state(
+            incoming_text=new_incoming_message,
+            chat_history=chat_history,
+            contact_id=contact_id or 0,
+            contact_preferences=contact_pref,
+        )
+
         # Build 7-level context (with intelligent historical retrieval when needed)
         context_pkg = await ContextManager.build_seven_level_context(
             persona=persona,
@@ -426,12 +622,17 @@ class AIService:
         )
         prompt_content = context_pkg["prompt_contents"]
         system_instruction = cls.build_system_prompt(persona, contact, new_incoming_message)
+        if analysis.guidance_notes:
+            system_instruction += f"\n\nСИТУАТИВНЫЕ УКАЗАНИЯ ДЛЯ ТЕКУЩЕЙ РЕПЛИКИ:\n{analysis.guidance_notes}"
 
         api_key = GeminiClient.get_api_key()
+        raw_text = None
         if not api_key:
-            logger.warning("GEMINI_API_KEY is not configured; using contextual fallback reply.")
-            raw_text = cls.generate_contextual_fallback(contact, persona, new_incoming_message)
-        else:
+            logger.warning("GEMINI_API_KEY is not configured; checking health state.")
+            HealthManager.register_error("GEMINI_API_KEY is missing")
+            return ""
+
+        try:
             generated = await GeminiClient.generate_content(
                 contents=prompt_content,
                 system_instruction=system_instruction,
@@ -439,7 +640,24 @@ class AIService:
                 max_output_tokens=320,
                 api_key=api_key,
             )
-            raw_text = generated or cls.generate_contextual_fallback(contact, persona, new_incoming_message)
+            if generated:
+                raw_text = generated
+                HealthManager.register_success()
+            else:
+                # Generation returned empty/none -> check if quota/provider failure occurred
+                if HealthManager.is_paused():
+                    return ""
+                raw_text = cls.generate_contextual_fallback(contact, persona, new_incoming_message, excluded_replies=recent_bot_replies)
+        except Exception as gen_err:
+            cls_type = HealthManager.classify_error(gen_err)
+            if cls_type == "critical":
+                HealthManager.register_error(gen_err)
+                logger.error("[AI_SERVICE] Critical AI error (%s). Halting reply with silence.", gen_err)
+                return ""
+            raw_text = cls.generate_contextual_fallback(contact, persona, new_incoming_message, excluded_replies=recent_bot_replies)
+
+        if not raw_text:
+            return ""
 
         # Parse technical event tags & status
         detected_event = None
@@ -474,6 +692,8 @@ class AIService:
 
         # Sanity Guard: Prevent unprompted AI/Bot delusions & geographic hallucinations
         raw_text = cls.sanitize_anti_ai_delusions(raw_text, new_incoming_message, contact=contact)
+        # Contextual Sanitizer: Strip unapproved laughter and excessive emojis
+        raw_text = ConversationStateAnalyzer.sanitize_bot_reply(raw_text, analysis)
 
         final_reply = DialogueStyleEngine.humanize_text_formatting(
             raw_text,
@@ -482,7 +702,55 @@ class AIService:
             style=getattr(persona, "current_style", "adaptive_all") if persona else "adaptive_all",
             contact_id=contact_id,
         )
+
+        # Anti-Repetition Guard: Check against recent outgoing bot replies
+        if cls._is_repetitive_reply(final_reply, recent_bot_replies):
+            logger.warning("[AI_SERVICE] Detected repetitive bot reply: '%s'. Regenerating distinct reply.", final_reply)
+            # Try 1 retry with negative constraint to Gemini if online
+            if api_key and not HealthManager.is_paused():
+                anti_repeat_instruction = (
+                    system_instruction
+                    + f"\n\nСТРОЖАЙШИЙ ЗАПРЕТ: Твоя предыдущая реплика была «{final_reply}». "
+                    f"КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО повторять эту фразу или похожую мысль! "
+                    "Ответь совершенно иначе, естественно и живо в контексте вопроса собеседника."
+                )
+                try:
+                    retry_gen = await GeminiClient.generate_content(
+                        contents=prompt_content,
+                        system_instruction=anti_repeat_instruction,
+                        temperature=0.88,
+                        max_output_tokens=320,
+                        api_key=api_key,
+                    )
+                    if retry_gen:
+                        retry_cleaned = cls.sanitize_anti_ai_delusions(retry_gen, new_incoming_message, contact=contact)
+                        retry_cleaned = ConversationStateAnalyzer.sanitize_bot_reply(retry_cleaned, analysis)
+                        candidate_retry = DialogueStyleEngine.humanize_text_formatting(
+                            retry_cleaned,
+                            no_brackets=no_brackets,
+                            incoming_text=new_incoming_message,
+                            style=getattr(persona, "current_style", "adaptive_all") if persona else "adaptive_all",
+                            contact_id=contact_id,
+                        )
+                        if not cls._is_repetitive_reply(candidate_retry, recent_bot_replies):
+                            final_reply = candidate_retry
+                except Exception as retry_err:
+                    logger.warning("[AI_SERVICE] Anti-repeat retry error: %s", retry_err)
+
+            if cls._is_repetitive_reply(final_reply, recent_bot_replies):
+                fallback_alt = cls.generate_contextual_fallback(
+                    contact, persona, new_incoming_message, excluded_replies=recent_bot_replies
+                )
+                final_reply = DialogueStyleEngine.humanize_text_formatting(
+                    fallback_alt,
+                    no_brackets=no_brackets,
+                    incoming_text=new_incoming_message,
+                    style=getattr(persona, "current_style", "adaptive_all") if persona else "adaptive_all",
+                    contact_id=contact_id,
+                )
         if contact_id:
+            has_laugh = bool(re.search(r"\b([п]?[ах]{3,12}|хаха|ахах)\b", final_reply, re.IGNORECASE))
+            ConversationStateAnalyzer.record_bot_outgoing(contact_id, has_laugh)
             user_turn_text = f"🎙 [ГС {voice_duration}с]: {new_incoming_message}" if is_voice else new_incoming_message
             cls.add_chat_turn(contact_id, user_turn_text, final_reply)
         return final_reply

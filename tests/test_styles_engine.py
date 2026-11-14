@@ -233,13 +233,14 @@ def test_voice_service_config_and_breathing():
     from companion.config import settings
     from companion.services.voice_service import VoiceService
 
-    assert settings.ELEVENLABS_VOICE_ID == "oik5x6jBI6Xj6MPIciZU"
+    assert settings.ELEVENLABS_VOICE_ID in ("WmNeiBsHQpj7dNcrBhAX", "QSaGDZOf5RWf5LPBHH15", "oik5x6jBI6Xj6MPIciZU")
 
-    # Test preparation adds breathing intake '... ' and removes exclamation
+    # Test preparation: no artificial leading ellipsis, natural punctuation, exclamation converted to period
     text = "Привет! Я сейчас кофе пью."
     prepared = VoiceService.prepare_text_for_tts(text)
-    assert prepared.startswith("...")
+    assert not prepared.startswith("...")
     assert "!" not in prepared
+    assert "Привет." in prepared
 
 
 def test_adaptive_only_style_engine():

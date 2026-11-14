@@ -22,6 +22,8 @@ from companion.models import (
     Subscription,
     PaymentInvoice,
     AccountSession,
+    ContactBehavioralPreference,
+    ContactMemory,
 )
 from companion.models.enums import ContactStatus, AccountStatus
 from companion.services.styles_service import DialogueStyleEngine, StyleType
@@ -2446,6 +2448,44 @@ class TelegramBotEngine:
                 help_text += "\n💡 <i>Также можно использовать меню внизу экрана или кнопки под сообщениями.</i>"
                 kb = {"inline_keyboard": [[{"text": "◀️ В главное меню", "callback_data": "menu_main"}]]}
                 await self.send_message(chat_id, help_text, reply_markup=kb, parse_mode="HTML")
+                return
+
+            if is_admin and text in ("/diag", "/diagnostics", "/status_system"):
+                # System diagnostics report without exposing secrets
+                accounts_stmt = select(AccountSession).where(AccountSession.is_active == True)
+                active_accs = (await session.execute(accounts_stmt)).scalars().all()
+
+                contacts_count = (await session.execute(select(func.count(Contact.id)))).scalar() or 0
+                prefs_count = (await session.execute(select(func.count(ContactBehavioralPreference.id)))).scalar() or 0
+                mem_count = (await session.execute(select(func.count(ContactMemory.id)))).scalar() or 0
+
+                acc_lines = []
+                for a in active_accs:
+                    conn_id_masked = f"{a.business_connection_id[:6]}...{a.business_connection_id[-4:]}" if a.business_connection_id else "None"
+                    acc_lines.append(f"• <b>@{a.phone_or_username or a.account_name}</b> (Conn: <code>{conn_id_masked}</code>)")
+
+                diag_msg = (
+                    "🛠 <b>СИСТЕМНАЯ ДИАГНОСТИКА БОТА</b>\n\n"
+                    f"🤖 <b>Control Bot:</b> @YourHelperW_bot (ID <code>8757255956</code>)\n"
+                    f"👑 <b>Admin ID:</b> <code>{self.admin_id}</code>\n\n"
+                    f"📱 <b>Telegram Business Connections:</b>\n"
+                    + ("\n".join(acc_lines) if acc_lines else "<i>Нет активных бизнес-подключений</i>")
+                    + f"\n\n🧠 <b>AI Провайдер:</b> Google Gemini\n"
+                    f"• Модель: <code>{settings.GEMINI_MODEL}</code>\n"
+                    f"• API Key: <code>{settings.GEMINI_API_KEY[:6]}...{settings.GEMINI_API_KEY[-4:] if settings.GEMINI_API_KEY else 'NOT_SET'}</code>\n\n"
+                    f"🎙 <b>Голосовой синтез (Voice Engine):</b>\n"
+                    f"• ElevenLabs Voice: <code>Ясна</code> (ID: <code>{settings.ELEVENLABS_VOICE_ID or 'oik5x6jBI6Xj6MPIciZU'}</code>)\n"
+                    f"• Эквалайзер: <i>6-band Studio Mastering EQ (Low Cut 62Hz 24dB/oct, 4-bell notches, High Shelf)</i>\n"
+                    f"• Формат: <i>48kHz Mono Ogg Opus (Single-pass)</i>\n\n"
+                    f"💾 <b>Трехуровневая память:</b>\n"
+                    f"• Уровень 1 (Short-term buffer): <i>Активен</i>\n"
+                    f"• Уровень 2 (Факты собеседников): <code>{mem_count}</code> записей\n"
+                    f"• Уровень 3 (Выученные предпочтения): <code>{prefs_count}</code> записей\n"
+                    f"• База контактов: <code>{contacts_count}</code> собеседников\n\n"
+                    f"❤️ <b>Контекстный модуль Дайвинчика:</b> <i>Активен (детектор анкет и диалогов)</i>\n"
+                    f"⚡ <b>Rhythm & Timings:</b> <i>Snappy (0.8-2.0s audio listening, 0.45-3.5s typing)</i>"
+                )
+                await self.send_message(chat_id, diag_msg, parse_mode="HTML")
                 return
 
             if is_admin and text in ("/admin", "/panel"):

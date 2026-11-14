@@ -43,6 +43,30 @@ class DaivinchikService:
     # Forward signatures
     FORWARD_BOT_KEYWORDS = ("дайвинчик", "leomatchbot", "знакомства", "leo match", "dayvinchik", "bot", "бот")
 
+    DAIVINCHIK_INTENT_REGEX = re.compile(
+        r'\b('
+        r'наш[её]л\s+(?:твою|тебя|вас)?\s*(?:анкету|в\s+дайвинчик|в\s+давинчик|в\s+тг|в\s+телеграм|там)|'
+        r'увидел\s+(?:твою|тебя|вас)?\s*(?:анкету|в\s+дайвинчик|в\s+давинчик|в\s+тг|в\s+телеграм|там)|'
+        r'попалась\s+(?:твоя|ваша)?\s*анкета|'
+        r'дайвинчик[а-я]*|давинчик[а-я]*|leomatchbot|leo\s*match|'
+        r'наш[её]л\s+в\s+знакомствах|'
+        r'анкет[а-я]+\s+в\s+дайвинчике|'
+        r'мы\s+в\s+дайвинчике|'
+        r'ты\s+есть\s+в\s+дайвинчике'
+        r')\b',
+        re.IGNORECASE
+    )
+
+    @classmethod
+    def detect_daivinchik_dialogue_context(cls, text: str) -> bool:
+        """
+        Determines whether the incoming dialogue refers semantically to Daivinchik or dating profile discovery.
+        Does NOT trigger on unrelated words; strictly identifies profile discovery context.
+        """
+        if not text:
+            return False
+        return bool(cls.DAIVINCHIK_INTENT_REGEX.search(text))
+
     @classmethod
     def is_daivinchik_message(cls, message: Dict[str, Any]) -> bool:
         """

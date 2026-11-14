@@ -292,10 +292,42 @@ class UserbotHandler:
             contact=contact,
             user_message=combined_text
         )
+        await ControlledFeedbackLearner.analyze_outcome_learning(
+            session=session,
+            contact=contact,
+            user_message=combined_text,
+            is_voice=any_voice
+        )
 
         if IntentService.detect_no_brackets_request(combined_text):
             contact.no_brackets = True
             await session.commit()
+
+        # 4c. Daivinchik / Dating context & Forwarded profile recognition
+        from companion.services.daivinchik_service import DaivinchikService
+        is_daivinchik_profile = False
+        parsed_p = None
+
+        for b_item in batch_inputs:
+            b_text = b_item.get("text") or ""
+            if DaivinchikService.is_daivinchik_message({"text": b_text}):
+                parsed_p = DaivinchikService.parse_profile(b_text)
+                is_daivinchik_profile = True
+                break
+
+        if is_daivinchik_profile and parsed_p:
+            parsed_p["source"] = "daivinchik"
+            parsed_p["discovered_at"] = current_time.isoformat()
+            contact.set_discovered_profile(parsed_p)
+            contact.dating_discovery_source = "daivinchik_forward"
+            if parsed_p.get("city") and not contact.detected_city:
+                contact.detected_city = parsed_p["city"]
+            await session.commit()
+            logger.info("[DAIVINCHIK] Extracted profile for contact %s: %s", contact.id, parsed_p.get("name"))
+        elif DaivinchikService.detect_daivinchik_dialogue_context(combined_text):
+            if not contact.dating_discovery_source:
+                contact.dating_discovery_source = "daivinchik_mention"
+                await session.commit()
 
         # 4c. Check conversational timing agreements (in 1 hour, tomorrow, goodnight, closure)
         agreement = IntentService.detect_agreement_or_pause(combined_text)
@@ -392,6 +424,22 @@ class UserbotHandler:
 
         # Read all currently unread / pending user messages since the last bot reply
         pending_unread_rows = await cls.get_pending_unread_messages(session, contact.id)
+
+        # Check HealthManager state before processing batch (Sections 9-10 & 27: Fail-safe Pause)
+        from companion.services.health_manager import HealthManager
+        if HealthManager.is_paused():
+            for r in pending_unread_rows:
+                r.processing_status = "QUEUED"
+            for m_obj in inserted_msgs:
+                m_obj.processing_status = "QUEUED"
+            await session.commit()
+            logger.warning("[USERBOT_HANDLER] System is in SAFE PAUSED state. Messages queued safely without reply.")
+            return {
+                "action": "paused_due_to_health",
+                "reason": HealthManager.get_paused_reason(),
+                "contact": contact,
+            }
+
         for r in pending_unread_rows:
             if getattr(r, "processing_status", "PROCESSED") in ("NEW", "BATCHED", "FAILED"):
                 r.processing_status = "PROCESSING"
@@ -546,6 +594,19 @@ class UserbotHandler:
             await session.commit()
             raise ai_err
 
+        if not reply_text:
+            logger.info("[USERBOT_HANDLER] Empty reply generated (Safe silence). No messages sent to user.")
+            for r in pending_unread_rows:
+                r.processing_status = "PROCESSED"
+            for m_obj in inserted_msgs:
+                m_obj.processing_status = "PROCESSED"
+            await session.commit()
+            return {
+                "action": "silence",
+                "contact": contact,
+                "unread_batch": unread_batch_dicts,
+            }
+
         # 8b. Build structured ResponsePlan (segmentation, selective Reply targeting, burst rhythm, laughter, parentheses, emojis, stickers)
         response_plan = ResponsePlanner.plan_response(
             raw_reply_text=reply_text,
@@ -556,6 +617,14 @@ class UserbotHandler:
         )
         ai_planning_s = time.perf_counter() - t_ai_start
         reply_text = response_plan["combined_text"]
+
+        from companion.ai.conversation_state_analyzer import ConversationStateAnalyzer
+        state_an = ConversationStateAnalyzer.analyze_dialogue_state(
+            incoming_text=all_unread_text,
+            chat_history=history,
+            contact_id=contact.id,
+        )
+        suggested_reaction = state_an.suggested_reaction
 
         # If contact sent a voice note (and transcription succeeded), girl naturally may reply with a voice note too
         if any_voice and all_unread_text and not voice_tag and random.random() < 0.40:
@@ -651,4 +720,5 @@ class UserbotHandler:
             "voice_file_id": last_voice_fid,
             "is_voice": any_voice,
             "voice_duration": total_voice_dur,
+            "suggested_reaction": suggested_reaction,
         }

@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
     ELEVENLABS_API_KEY: Optional[str] = None
-    ELEVENLABS_VOICE_ID: Optional[str] = "oik5x6jBI6Xj6MPIciZU"
+    ELEVENLABS_VOICE_ID: Optional[str] = "WmNeiBsHQpj7dNcrBhAX"
     VOICE_CHANCE: float = 0.05
 
     # Russian Speech Synthesis (Yandex SpeechKit - 100% Native Russian)

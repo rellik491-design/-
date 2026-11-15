@@ -1014,6 +1014,20 @@ class AIService:
             return ""
         final_reply = OutputSanitizer.sanitize_outgoing_text(validated_reply)
 
+        if contact and persona and final_reply:
+            try:
+                from companion.services.persona_lore_service import PersonaLoreService
+                lore_res = PersonaLoreService.resolve_geographic_connection(
+                    persona=persona,
+                    contact=contact,
+                    user_geo_profile=user_geo_profile,
+                    incoming_message=new_incoming_message,
+                    active_thread=internal_context.get("conversation", {}).get("active_thread"),
+                )
+                PersonaLoreService.record_lore_disclosure_from_reply(contact, final_reply, lore_res)
+            except Exception as lore_err:
+                logger.debug("[AI_SERVICE] Persona lore disclosure tracking skipped: %s", lore_err)
+
         if contact_id:
             has_laugh = bool(re.search(r"\b([п]?[ах]{3,12}|хаха|ахах)\b", final_reply, re.IGNORECASE))
             ConversationStateAnalyzer.record_bot_outgoing(contact_id, has_laugh)

@@ -43,6 +43,7 @@ async def init_db():
                 "trip_country_code": "VARCHAR(8) NULL",
                 "trip_timezone": "VARCHAR(64) NULL",
                 "location_extra": "TEXT NULL",
+                "city_connections_data": "TEXT DEFAULT '[]'",
             }
             for col_name, col_type in new_p_cols.items():
                 if col_name not in p_cols:
@@ -131,6 +132,8 @@ async def init_db():
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN temporary_location VARCHAR(64) NULL")
             if "geo_profile_data" not in c_cols:
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN geo_profile_data TEXT NULL")
+            if "persona_lore_state" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN persona_lore_state TEXT NULL")
             if "active_thread" not in c_cols:
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN active_thread VARCHAR(64) DEFAULT 'general'")
             if "correction_events" not in c_cols:

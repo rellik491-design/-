@@ -387,6 +387,19 @@ class ContextManager:
             if geo_block:
                 context_blocks.append(geo_block)
 
+        # Persona Lore & Geographic Connection (same country, different city, family tie, dynamic visit)
+        from companion.services.persona_lore_service import PersonaLoreService
+        lore_resolution = PersonaLoreService.resolve_geographic_connection(
+            persona=persona,
+            contact=contact,
+            user_geo_profile=effective_geo,
+            incoming_message=new_incoming_message,
+            active_thread=active_thread,
+        )
+        lore_block = PersonaLoreService.format_persona_lore_prompt_block(lore_resolution, persona)
+        if lore_block:
+            context_blocks.append(lore_block)
+
         # Negative / Correction Memory (Highest Priority: Sections 18.E, 25, 30)
         corrections_list: List[str] = []
         if contact:
@@ -514,6 +527,13 @@ class ContextManager:
             "message_control": {
                 "bot_must_not_answer_own_message": True,
                 "target_author": "USER",
+            },
+            "persona_lore": {
+                "matched": lore_resolution.matched,
+                "geographic_relation": lore_resolution.geographic_relation,
+                "travel": lore_resolution.travel,
+                "relevant_now": lore_resolution.relevant_now,
+                "cooldown_active": lore_resolution.cooldown_active,
             },
         }
 

@@ -12,11 +12,14 @@ from companion.models.entities import (
     ContactBehavioralPreference,
     ConversationSummary,
     ProcessedUpdate,
+    ProcessedMessage,
     MediaAsset,
     SentMediaHistory,
     DailyStat,
     PaymentInvoice,
     DaivinchikProfile,
+    PersonaPhoto,
+    ChatPhotoUsage,
 )
 
 __all__ = [
@@ -40,9 +43,12 @@ __all__ = [
     "ContactBehavioralPreference",
     "ConversationSummary",
     "ProcessedUpdate",
+    "ProcessedMessage",
     "MediaAsset",
     "SentMediaHistory",
     "DailyStat",
     "PaymentInvoice",
     "DaivinchikProfile",
+    "PersonaPhoto",
+    "ChatPhotoUsage",
 ]

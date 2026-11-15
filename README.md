@@ -55,30 +55,25 @@ telegram-companion-ai/
 
 ---
 
-## 🚀 Быстрый старт
+## 🚀 Быстрый старт (Windows, в 1 клик)
 
-### 1. Установка зависимостей (через `uv`)
-```powershell
-cd telegram-companion-ai
-uv sync
-```
+1. Клонируйте репозиторий или скачайте архив.
+2. Запустите **`run_bot.bat`** двойным кликом.
+   - Скрипт сам проверит/установит `uv` и **Python 3.14**, установит все зависимости из `uv.lock` (или `requirements.txt` через `pip`).
+   - При первом запуске автоматически создаст `.env` из `.env.example` и откроет его в Блокноте.
+3. Впишите в `.env` свои ключи:
+   - `ADMIN_BOT_TOKEN` — токен вашего бота от `@BotFather`
+   - `ADMIN_TELEGRAM_ID` — ваш числовой Telegram ID
+   - `GEMINI_API_KEY` (или `GEMINI_API_KEYS=ключ1,ключ2,ключ3` для авто-ротации)
+4. Сохраните `.env` и нажмите любую клавишу — бот запустится с автоперезапуском 24/7.
 
-### 2. Запуск всех тестов (56 тестов)
+### Ручной запуск (для разработчиков)
 ```powershell
-uv run pytest
-```
-
-### 3. Запуск живого сервера бота
-```powershell
+uv sync --frozen
 uv run python main.py
 ```
 
----
-
-## ⚙️ Конфигурация (`.env`)
-
-Скопируйте шаблон:
+### Запуск тестов
 ```powershell
-copy .env.example .env
+uv run pytest
 ```
-Заполните обязательные переменные: `ADMIN_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`.

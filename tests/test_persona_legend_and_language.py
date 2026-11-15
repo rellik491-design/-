@@ -158,8 +158,8 @@ async def test_language_detection_pipeline():
         session.add(persona)
         await session.commit()
 
-        # Contact 1: writes in Ukrainian -> must be "ru" (strictly Russian, never switch to Ukrainian)
-        res_ru = await UserbotHandler.process_incoming_message(
+        # Contact 1: writes in Ukrainian -> must be accurately detected as "uk"
+        res_uk = await UserbotHandler.process_incoming_message(
             session=session,
             user_id=user.id,
             sender_tg_id=uid + 1,
@@ -167,10 +167,10 @@ async def test_language_detection_pipeline():
             sender_first_name="Олексій",
             text="Привіт, як справи? шо робиш?",
         )
-        c1 = res_ru["contact"]
-        assert c1.language == "ru"
+        c1 = res_uk["contact"]
+        assert c1.language == "uk"
 
-        # Contact 2: writes 100% in English -> must be "en"
+        # Contact 2: writes 100% in English -> must be "other" or "en"
         res_en = await UserbotHandler.process_incoming_message(
             session=session,
             user_id=user.id,
@@ -180,7 +180,7 @@ async def test_language_detection_pipeline():
             text="Hey, where are you from?",
         )
         c2 = res_en["contact"]
-        assert c2.language == "en"
+        assert c2.language in ("en", "other")
 
 
 def test_ai_service_system_prompt_has_all_user_rules():
@@ -206,9 +206,10 @@ def test_ai_service_system_prompt_has_all_user_rules():
     assert "Почему переехала: Поступила в вуз" in prompt
     assert "Сколько уже тут: 4 года" in prompt
 
-    # 2. Strict language rules
-    assert "НЕ ПЕРЕХОДИ НА УКРАИНСКИЙ ЯЗЫК" in prompt
-    assert "Общайся исключительно на русском языке" in prompt
+    # 2. Strict multilingual & Russian rules
+    assert "МУЛЬТИЯЗЫЧНОСТЬ" in prompt
+    assert "НА РУССКОМ ЯЗЫКЕ" in prompt
+    assert "НА УКРАИНСКОМ ЯЗЫКЕ" in prompt
 
     # 3. Text style & Anti-AI
     assert "КАТЕГОРИЧЕСКИЙ ЗАПРЕТ ДЛИННЫХ ТИРЕ" in prompt

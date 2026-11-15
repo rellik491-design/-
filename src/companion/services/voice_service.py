@@ -61,11 +61,11 @@ class VoiceService:
 
     # Section 19: Pronunciation Correction Layer for Russian Conversational Speech
     PRONUNCIATION_DICTIONARY: Dict[str, str] = {
-        # Social & Telegram Messenger Slang
-        r"\bгс\b": "гэ э́с",
-        r"\bвк\b": "вэ ка́",
-        r"\bтг\b": "тэ гэ́",
-        r"\bлс\b": "эл э́с",
+        # Social & Telegram Messenger Slang (Expanded Spoken Forms)
+        r"\bгс\b": "голосовое",
+        r"\bвк\b": "вконтакте",
+        r"\bтг\b": "телеграм",
+        r"\bлс\b": "личку",
         r"\bсмс\b": "эс эм э́с",
         r"\bсмски\b": "эс эм э́ски",
         r"\bсмску\b": "эс эм э́ску",
@@ -95,9 +95,21 @@ class VoiceService:
         r"\bкринжово\b": "кринжо́во",
         r"\bкраш\b": "краш",
         r"\bкрашиха\b": "краши́ха",
-        r"\bтрек\b": "трэк",
-        r"\bтреки\b": "трэ́ки",
-        r"\bтрека\b": "трэ́ка",
+        # Russian "Е" & Word Preservations (Strictly natural soft Cyrillic 'е', NEVER 'э'!)
+        r"\bтрек\b": "трек",
+        r"\bтреки\b": "тре́ки",
+        r"\bтрека\b": "тре́ка",
+        r"\bкофе\b": "ко́фе",
+        r"\bкафе\b": "кафе́",
+        r"\bтебе\b": "тебе́",
+        r"\bсегодня\b": "сего́дня",
+        r"\bвместе\b": "вме́сте",
+        r"\bвечер\b": "ве́чер",
+        r"\bвечером\b": "ве́чером",
+        r"\bдело\b": "де́ло",
+        r"\bдела\b": "дела́",
+        r"\bуспеть\b": "успе́ть",
+        r"\bодновременно\b": "одновреме́нно",
         r"\bчат\b": "чат",
         r"\bчате\b": "ча́те",
         r"\bчатик\b": "ча́тик",
@@ -106,8 +118,6 @@ class VoiceService:
         r"\bгифка\b": "ги́фка",
         r"\bгифку\b": "ги́фку",
         r"\bгифки\b": "ги́фки",
-        r"\bкофе\b": "ко́фэ",
-        r"\bкафе\b": "кафэ́",
         r"\bинфо\b": "и́нфо",
         # Irregular & Mobile Russian Stresses
         r"\bзанята\b": "занята́",
@@ -413,9 +423,9 @@ class VoiceService:
     # Studio-grade Mastering Equalizer & Subtle Smartphone Recording Texture:
     # 1. Low Cut 62Hz 24dB/oct (cascaded 2-pole highpass)
     # 2. Bell 194Hz -2.33dB, Bell 437Hz -1.12dB, Bell 800Hz -1.45dB, Bell 2841Hz +1dB, High Shelf 6678Hz +0.60dB
-    # 3. Softened extreme highs (lowpass 12.5kHz)
-    # 4. Subtle harmonic density (asoftclip type=atan param=0.85)
-    # 5. Slight natural dynamic compression (acompressor ratio=2.2 makeup=1.2dB)
+    # 3. Softened extreme highs (lowpass 11.8kHz)
+    # 4. Subtle harmonic density (asoftclip type=atan param=1.18)
+    # 5. Slight natural dynamic compression (acompressor ratio=2.7 makeup=7.5dB)
     # 6. Very subtle low-level mic noise floor (-66dB pink noise bed)
     # 7. Safe peak limiting (alimiter -1.0dB)
     MASTERING_EQ_FILTER = (
@@ -429,26 +439,81 @@ class VoiceService:
 
     SUBTLE_TEXTURE_FILTER_COMPLEX = (
         f"[0:a]{MASTERING_EQ_FILTER},"
-        "acompressor=threshold=-18dB:ratio=2.6:attack=12:release=90:makeup=8.0dB,"
-        "asoftclip=type=atan:param=1.10,"
-        "lowpass=f=12500[voice];"
-        "anoisesrc=color=pink:amplitude=0.007:sample_rate=48000,highpass=f=100,lowpass=f=7200[noise];"
+        "asoftclip=type=atan:param=1.18,"
+        "lowpass=f=11800[voice];"
+        "anoisesrc=color=pink:amplitude=0.009:sample_rate=48000,highpass=f=120,lowpass=f=6500[noise];"
+        "[voice][noise]amix=inputs=2:duration=first:dropout_transition=0:weights=1.0 1.0:normalize=0,"
+        "acompressor=threshold=-19dB:ratio=2.7:attack=12:release=100:makeup=7.5dB,"
+        "alimiter=limit=-1.0dB:attack=5:release=50[out]"
+    )
+
+    # =========================================================================
+    # ADVANCED SMARTPHONE MICROPHONE PRESETS (A / B / C)
+    # =========================================================================
+    # Variant A: Clean unprocessed ElevenLabs output (transparent peak limiter into Telegram Opus)
+    CLEAN_FILTER_COMPLEX = "alimiter=limit=-1.0dB:attack=5:release=50[out]"
+
+    # Variant B: Previous subtle texture processing preset
+    PREVIOUS_TEXTURE_FILTER_COMPLEX = SUBTLE_TEXTURE_FILTER_COMPLEX
+
+    # Variant C: Authentic Smartphone Microphone Recording Preset (ACTIVE DEFAULT)
+    # Target: Casual Telegram voice message recorded on a normal smartphone close to mouth.
+    # 1. Reduces studio condenser brightness:
+    #    - Gentle high-shelf roll-off starting at 7.5 kHz (-3.5 dB)
+    #    - Gentle 2-pole lowpass at 10.8 kHz (natural upper limit for phone mics, removes synthetic air)
+    # 2. Authentic smartphone acoustic coloration:
+    #    - HPF at 82 Hz (poles=2) to remove low rumble while preserving vocal warmth (150-500 Hz)
+    #    - Mild dip at 280 Hz (-1.2 dB) to prevent close-mic boomy muddiness
+    #    - Natural speech presence bump at 3.4 kHz (+0.6 dB)
+    # 3. Dynamic compression:
+    #    - Threshold -20dB, ratio 2.4:1, attack 15ms, release 110ms, makeup 3.5dB (2-4 dB gain reduction on peaks)
+    # 4. Subtle microphone nonlinearity / saturation:
+    #    - asoftclip atan param=1.08 for tiny analog warmth
+    # 5. Microphone self-noise floor:
+    #    - Pink noise bed shaped 120-6500 Hz, subtly audible during pauses
+    # 6. Telegram Codec:
+    #    - 48 kHz mono libopus with -application voip at 42kbps
+    SMARTPHONE_EQ_FILTER = (
+        "highpass=f=82:poles=2,"
+        "equalizer=f=280:width_type=q:width=1.2:gain=-1.2,"
+        "equalizer=f=3400:width_type=q:width=1.4:gain=0.6,"
+        "highshelf=f=7500:gain=-3.5,"
+        "lowpass=f=10800:poles=2"
+    )
+
+    SMARTPHONE_MIC_FILTER_COMPLEX = (
+        f"[0:a]{SMARTPHONE_EQ_FILTER},"
+        "acompressor=threshold=-20dB:ratio=2.4:attack=15:release=110:makeup=3.5dB,"
+        "asoftclip=type=atan:param=1.08,"
+        "alimiter=limit=-1.2dB:attack=5:release=40[voice];"
+        "anoisesrc=color=pink:amplitude=0.0075:sample_rate=48000,highpass=f=120,lowpass=f=6500[noise];"
         "[voice][noise]amix=inputs=2:duration=first:dropout_transition=0:weights=1.0 1.0:normalize=0,"
         "alimiter=limit=-1.0dB:attack=5:release=50[out]"
     )
 
     @classmethod
-    def apply_mastering_equalizer(cls, raw_audio: bytes) -> bytes:
+    def apply_mastering_equalizer(cls, raw_audio: bytes, preset: str = "C") -> bytes:
         """
-        Fast studio-grade post-processing equalizer & subtle recording texture chain:
-        - Low Cut 62HZ 24dB/oct (two cascaded 2-pole highpass filters at 62 Hz)
-        - Bell 194hz -2.33dB, Bell 437hz -1.12dB, Bell 800hz -1.45dB, Bell 2841hz +1dB, High Shelf 6678hz +0.60db
-        - Subtle smartphone recording texture: harmonic density (softclip), gentle compression,
-          softened extreme highs, very subtle low-level mic noise floor (-66dB pink bed) and limiter.
+        Applies authentic smartphone acoustic mastering or preset filter chain:
+        - Preset 'A': Clean unprocessed ElevenLabs output (transparent peak limiter into Telegram Opus)
+        - Preset 'B': Previous subtle texture processing preset
+        - Preset 'C' (Default): Authentic smartphone microphone recording preset (reduced studio brightness,
+          82Hz HPF, 7.5kHz shelf, 10.8kHz roll-off, 2.4:1 comp, 1.08 saturation, shaped pink noise bed)
         Converts any audio stream to Telegram-native 48kHz mono libopus Ogg voice note.
         """
         if not raw_audio or len(raw_audio) < 10:
             return raw_audio
+
+        preset_key = (preset or "C").upper().strip()
+        if preset_key == "A":
+            filter_complex = cls.CLEAN_FILTER_COMPLEX
+            bitrate = "48k"
+        elif preset_key == "B":
+            filter_complex = cls.SUBTLE_TEXTURE_FILTER_COMPLEX
+            bitrate = "48k"
+        else:
+            filter_complex = cls.SMARTPHONE_MIC_FILTER_COMPLEX
+            bitrate = "42k"
 
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         with tempfile.NamedTemporaryFile(suffix=".audio", delete=False) as f_in:
@@ -460,10 +525,10 @@ class VoiceService:
             ffmpeg_exe,
             "-y",
             "-i", in_path,
-            "-filter_complex", cls.SUBTLE_TEXTURE_FILTER_COMPLEX,
+            "-filter_complex", filter_complex,
             "-map", "[out]",
             "-c:a", "libopus",
-            "-b:a", "48k",
+            "-b:a", bitrate,
             "-vbr", "on",
             "-ar", "48000",
             "-ac", "1",
@@ -476,7 +541,7 @@ class VoiceService:
                 with open(out_path, "rb") as f_out:
                     return f_out.read()
         except Exception as e:
-            logger.error("Error in apply_mastering_equalizer: %s", e)
+            logger.error("Error in apply_mastering_equalizer (preset=%s): %s", preset_key, e)
         finally:
             if os.path.exists(in_path):
                 try:
@@ -492,11 +557,11 @@ class VoiceService:
         return raw_audio
 
     @classmethod
-    def apply_phone_mic_filter(cls, raw_mp3: bytes) -> bytes:
+    def apply_phone_mic_filter(cls, raw_mp3: bytes, preset: str = "C") -> bytes:
         """
-        Applies authentic smartphone acoustic mastering using the custom equalizer chain.
+        Applies authentic smartphone acoustic mastering using the specified preset (default 'C').
         """
-        return cls.apply_mastering_equalizer(raw_mp3)
+        return cls.apply_mastering_equalizer(raw_mp3, preset=preset)
 
     @classmethod
     def humanize_text_for_speech(cls, text: str) -> str:
@@ -727,7 +792,13 @@ class VoiceService:
         )
         spoken_text = prosody_obj.speech_text or text
 
-        # 1. Primary: Official ElevenLabs SDK (eleven_multilingual_v2 with native Russian female voice)
+        # Detect text language for ElevenLabs and Edge TTS (supports RU, UK, mixed)
+        from companion.services.multilingual_service import MultilingualService
+        detected_res = MultilingualService.detect_language(text=spoken_text)
+        tts_lang_code = "uk" if detected_res.language == "uk" else "ru"
+        fallback_voice = "uk-UA-PolinaNeural" if detected_res.language == "uk" else cls.DEFAULT_FEMALE_VOICE
+
+        # 1. Primary: Official ElevenLabs SDK (eleven_multilingual_v2 with native Russian & Ukrainian female voice)
         elevenlabs_key = settings.ELEVENLABS_API_KEY
         if elevenlabs_key:
             voice_id = settings.ELEVENLABS_VOICE_ID or "WmNeiBsHQpj7dNcrBhAX"
@@ -751,7 +822,7 @@ class VoiceService:
                                 voice_id=voice_id,
                                 text=spoken_text,
                                 model_id=model,
-                                language_code="ru",
+                                language_code=tts_lang_code,
                                 voice_settings=dynamic_vs,
                             )
                             raw_mp3 = b"".join(audio_stream)
@@ -770,9 +841,9 @@ class VoiceService:
             except Exception as e:
                 logger.warning("ElevenLabs SDK generation failed: %s (%s). Trying fallback.", type(e).__name__, e)
 
-        # 2. High-fidelity Edge Neural TTS fallback (ru-RU-SvetlanaNeural)
+        # 2. High-fidelity Edge Neural TTS fallback (ru-RU-SvetlanaNeural / uk-UA-PolinaNeural)
         import edge_tts
-        target_voice = voice_name or cls.DEFAULT_FEMALE_VOICE
+        target_voice = voice_name or fallback_voice
         communicate = edge_tts.Communicate(
             spoken_text,
             target_voice,
@@ -868,3 +939,106 @@ class VoiceService:
             if text:
                 return await cls.send_text_fallback(bot_token, chat_id, text, business_connection_id, reply_markup)
             return False
+
+    @classmethod
+    async def generate_ab_test_samples(
+        cls,
+        text: str,
+        output_dir: Optional[Union[str, Path]] = None,
+        chat_id: int = 0,
+    ) -> Dict[str, str]:
+        """
+        Generates 3 comparison audio variants for A/B testing:
+        - variant_A_clean.ogg: Clean unprocessed ElevenLabs output transcoded directly to Telegram Opus
+        - variant_B_previous.ogg: Previous processing preset (SUBTLE_TEXTURE_FILTER_COMPLEX)
+        - variant_C_smartphone.ogg: New authentic smartphone microphone processing preset (SMARTPHONE_MIC_FILTER_COMPLEX)
+        Returns a dict mapping variant name to absolute file path.
+        """
+        if not output_dir:
+            out_p = Path("assets/voice_pack/ab_test")
+        else:
+            out_p = Path(output_dir)
+        out_p.mkdir(parents=True, exist_ok=True)
+
+        from companion.services.prosody_controller import AdvancedProsodyController
+
+        prosody_obj = AdvancedProsodyController.process_for_tts(
+            text=text,
+            chat_id=chat_id,
+            digits_to_words_fn=cls.digits_to_words,
+        )
+        spoken_text = prosody_obj.speech_text or text
+
+        from companion.services.multilingual_service import MultilingualService
+        det_lang = MultilingualService.detect_language(text=spoken_text).language
+        ab_lang_code = "uk" if det_lang == "uk" else "ru"
+        ab_fallback_voice = "uk-UA-PolinaNeural" if det_lang == "uk" else cls.DEFAULT_FEMALE_VOICE
+
+        elevenlabs_key = settings.ELEVENLABS_API_KEY
+        raw_mp3: Optional[bytes] = None
+
+        if elevenlabs_key:
+            voice_id = settings.ELEVENLABS_VOICE_ID or "WmNeiBsHQpj7dNcrBhAX"
+
+            def _synth():
+                try:
+                    from elevenlabs.client import ElevenLabs
+                    from elevenlabs import VoiceSettings
+
+                    client = ElevenLabs(api_key=elevenlabs_key)
+                    dynamic_vs = VoiceSettings(
+                        stability=prosody_obj.stability,
+                        similarity_boost=prosody_obj.similarity_boost,
+                        style=prosody_obj.style,
+                        use_speaker_boost=True,
+                    )
+                    for model in ["eleven_multilingual_v2", "eleven_turbo_v2_5"]:
+                        try:
+                            stream = client.text_to_speech.convert(
+                                voice_id=voice_id,
+                                text=spoken_text,
+                                model_id=model,
+                                language_code=ab_lang_code,
+                                voice_settings=dynamic_vs,
+                            )
+                            data = b"".join(stream)
+                            if data:
+                                return data
+                        except Exception as err:
+                            logger.warning("AB test synthesis model %s failed: %s", model, err)
+                except Exception as ex:
+                    logger.warning("AB test client init failed: %s", ex)
+                return None
+
+            try:
+                raw_mp3 = await asyncio.to_thread(_synth)
+            except Exception as e:
+                logger.warning("AB test synthesis exception: %s", e)
+
+        if not raw_mp3:
+            import edge_tts
+
+            communicate = edge_tts.Communicate(spoken_text, ab_fallback_voice, rate="-5%", pitch="+2Hz")
+            buf = io.BytesIO()
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    buf.write(chunk["data"])
+            raw_mp3 = buf.getvalue()
+
+        var_a = cls.apply_mastering_equalizer(raw_mp3, preset="A")
+        var_b = cls.apply_mastering_equalizer(raw_mp3, preset="B")
+        var_c = cls.apply_mastering_equalizer(raw_mp3, preset="C")
+
+        path_a = out_p / "variant_A_clean.ogg"
+        path_b = out_p / "variant_B_previous.ogg"
+        path_c = out_p / "variant_C_smartphone.ogg"
+
+        path_a.write_bytes(var_a)
+        path_b.write_bytes(var_b)
+        path_c.write_bytes(var_c)
+
+        return {
+            "variant_A": str(path_a.resolve()),
+            "variant_B": str(path_b.resolve()),
+            "variant_C": str(path_c.resolve()),
+        }

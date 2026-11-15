@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 import httpx
 
@@ -9,21 +10,46 @@ from companion.config import settings
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class STTResult:
+    transcript: str
+    language: str  # "ru", "uk", "mixed", "other", "unknown"
+    language_confidence: float = 0.95
+    transcription_confidence: float = 0.90
+    normalized_text: str = ""
+    original_audio: Optional[bytes] = None
+    is_success: bool = True
+    error_message: Optional[str] = None
+
+
 class STTService:
     """
     High-performance Speech-to-Text (STT) service for recognizing
     incoming voice notes and audio messages from Telegram contacts.
     
+    Supports seamless multilingual transcription:
+    - Russian
+    - Ukrainian
+    - Mixed Russian + Ukrainian (Surzhyk, code-switching)
+    Without forced translation or loss of original colloquial wording.
+    
     Supported backends:
-    1. Google Gemini Multimodal Audio (Native OGG/Opus parsing via official google-genai SDK)
-    2. Groq Whisper (Ultra-fast cloud Whisper-large-v3 / whisper-large-v3-turbo)
-    3. OpenAI Whisper (whisper-1)
+    1. ElevenLabs Scribe STT (ultra-high accuracy, multilingual, quota-independent)
+    2. Google Gemini Multimodal Audio (Native OGG/Opus parsing via google-genai SDK)
+    3. Groq Whisper (Ultra-fast cloud Whisper-large-v3-turbo)
+    4. OpenAI Whisper (whisper-1)
     """
 
     STT_PROMPT = (
-        "Ты — высокоточная система распознавания речи (Speech-to-Text) для мессенджера Telegram. "
-        "Транскрибируй эту аудиозапись на русском языке в текст точно слово в слово, как сказал человек. "
-        "Сохраняй естественную разговорную речь, эмоциональные интонации, вопросы, восклицания и пунктуацию. "
+        "Ты — высокоточная мультиязычная система распознавания речи (Speech-to-Text) для мессенджера Telegram. "
+        "Транскрибируй эту аудиозапись на том языке, на котором говорит человек (русский, украинский или смешанный русско-украинский язык / суржик) точно слово в слово, как сказал человек. "
+        "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО переводить речь с украинского на русский или с русского на украинский! "
+        "Если человек говорит по-украински — пиши строго по-украински. "
+        "Если человек говорит по-русски — пиши строго по-русски. "
+        "Если речь смешанная — сохраняй смешанный текст в точности. "
+        "Сохраняй естественную разговорную речь, сленг, эмоциональные интонации, вопросы, восклицания и пунктуацию. "
+        "Если какие-то слова или фрагменты произнесены неразборчиво или сомнительно — обозначь их как [нерозбірливо] (для укр) или [неразборчиво] (для рус), "
+        "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО выдумывать или додумывать несказанные слова! "
         "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО добавлять пояснения, вводные слова вроде 'Человек сказал:' или заключать текст в кавычки. "
         "Выведи ТОЛЬКО произнесенные слова."
     )
@@ -148,34 +174,59 @@ class STTService:
         try:
             from google import genai
             from google.genai import types
+            from companion.ai.gemini_client import GeminiClient
 
-            client = genai.Client(api_key=api_key)
             audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
             stt_prompt = prompt or cls.STT_PROMPT
 
-            candidate_models = [
+            if getattr(settings, "USE_VERTEX_AI", False):
+                client = genai.Client(
+                    vertexai=True,
+                    project=getattr(settings, "VERTEX_PROJECT", "gen-lang-client-0915483038"),
+                    location=getattr(settings, "VERTEX_LOCATION", "us-central1"),
+                )
+                models_to_try = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.0-flash"]
+                for model_name in models_to_try:
+                    try:
+                        response = await client.aio.models.generate_content(
+                            model=model_name,
+                            contents=[audio_part, stt_prompt],
+                        )
+                        if response and response.text:
+                            logger.info("Successfully transcribed voice with Vertex model: %s", model_name)
+                            return response.text.strip()
+                    except Exception as me:
+                        logger.warning("Vertex STT model %s failed: %s", model_name, me)
+
+            # Key pool rotation for STT
+            candidate_keys = GeminiClient.get_api_keys(api_key)
+            models_to_try = [
                 settings.GEMINI_MODEL,
                 "gemini-flash-lite-latest",
                 "gemini-3.8-flash",
                 "gemini-3.5-flash-lite",
             ]
-            unique_models = []
-            for m in candidate_models:
-                if m and m not in unique_models:
-                    unique_models.append(m)
+            unique_models = [m for idx, m in enumerate(models_to_try) if m and m not in models_to_try[:idx]]
 
-            for model_name in unique_models:
-                try:
-                    response = await client.aio.models.generate_content(
-                        model=model_name,
-                        contents=[audio_part, stt_prompt],
-                    )
-                    if response and response.text:
-                        text = response.text.strip()
-                        logger.info("Successfully transcribed voice with Gemini model: %s", model_name)
-                        return text
-                except Exception as me:
-                    logger.warning("Gemini STT model %s failed: %s", model_name, me)
+            for current_key in candidate_keys:
+                client = genai.Client(api_key=current_key)
+                for model_name in unique_models:
+                    try:
+                        response = await client.aio.models.generate_content(
+                            model=model_name,
+                            contents=[audio_part, stt_prompt],
+                        )
+                        if response and response.text:
+                            logger.info("Successfully transcribed voice with Gemini model: %s", model_name)
+                            return response.text.strip()
+                    except Exception as me:
+                        err_s = str(me)
+                        logger.warning("Gemini STT model %s on key %s... failed: %s", model_name, current_key[:6], err_s[:150])
+                        if any(sig in err_s.lower() for sig in [
+                            "401", "unauthenticated", "account_state_invalid", "deleted or disabled",
+                            "429", "resource_exhausted", "402", "prepayment", "quota", "403"
+                        ]):
+                            break  # rotate to next key
         except Exception as e:
             logger.error("Exception during Gemini STT transcription: %s", e)
         return None
@@ -191,7 +242,6 @@ class STTService:
         files = {
             "file": (f"voice.{ext}", audio_bytes, mime_type),
             "model": (None, "whisper-large-v3-turbo"),
-            "language": (None, "ru"),
             "response_format": (None, "json"),
         }
         try:
@@ -217,7 +267,6 @@ class STTService:
         files = {
             "file": (f"voice.{ext}", audio_bytes, mime_type),
             "model": (None, "whisper-1"),
-            "language": (None, "ru"),
             "response_format": (None, "json"),
         }
         try:
@@ -258,8 +307,111 @@ class STTService:
         return None
 
     @classmethod
+    async def transcribe_voice_multilingual(
+        cls,
+        audio_bytes: bytes,
+        mime_type: str = "audio/ogg",
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        recent_language: Optional[str] = None,
+        message_id: Any = None,
+    ) -> STTResult:
+        """
+        Full multilingual voice recognition pipeline (Sections 3, 4, 6, 9, 14, 15):
+        Telegram voice
+        -> audio preprocessing
+        -> multilingual STT
+        -> language detection
+        -> transcript
+        -> confidence check
+        -> slang normalization (non-destructive)
+        -> conversation analysis metadata
+        """
+        from companion.services.multilingual_service import MultilingualService
+
+        if not audio_bytes or len(audio_bytes) < 4:
+            return STTResult(
+                transcript="",
+                language="unknown",
+                language_confidence=0.0,
+                transcription_confidence=0.0,
+                normalized_text="",
+                original_audio=audio_bytes,
+                is_success=False,
+                error_message="empty_or_too_small_audio",
+            )
+
+        # 1. Run Multilingual STT
+        raw_transcript = await cls.transcribe_audio_bytes(audio_bytes, mime_type=mime_type)
+        if not raw_transcript or not raw_transcript.strip():
+            return STTResult(
+                transcript="",
+                language="unknown",
+                language_confidence=0.0,
+                transcription_confidence=0.0,
+                normalized_text="",
+                original_audio=audio_bytes,
+                is_success=False,
+                error_message="stt_failed_or_empty",
+            )
+
+        transcript = raw_transcript.strip()
+
+        # 2. Context-Aware Language Detection
+        lang_res = MultilingualService.detect_language(
+            text=transcript,
+            conversation_history=conversation_history,
+            recent_language=recent_language,
+        )
+
+        # 3. Transcription confidence estimation
+        # If model preserved uncertain segments ([нерозбірливо], [неразборчиво], [нечітко]), reflect in confidence
+        has_uncertain = bool(re.search(r"\[(нерозбірливо|неразборчиво|нечітко|неясно)\]", transcript, re.IGNORECASE))
+        if has_uncertain:
+            stt_conf = 0.72
+        elif len(transcript.split()) >= 2:
+            stt_conf = 0.94
+        else:
+            stt_conf = 0.88
+
+        # 4. Non-destructive Slang Normalization
+        norm_res = MultilingualService.normalize_slang(
+            text=transcript,
+            language=lang_res.language,
+            conversation_history=conversation_history,
+            recent_language=recent_language,
+        )
+
+        # 5. Developer Debug Logging (Section 14)
+        if message_id is not None:
+            MultilingualService.log_developer_debug(
+                message_id=message_id,
+                message_type="voice",
+                language=lang_res.language,
+                language_confidence=lang_res.confidence,
+                transcript=transcript,
+                normalized_text=norm_res.normalized_text,
+                stt_confidence=stt_conf,
+            )
+
+        return STTResult(
+            transcript=transcript,
+            language=lang_res.language,
+            language_confidence=lang_res.confidence,
+            transcription_confidence=stt_conf,
+            normalized_text=norm_res.normalized_text,
+            original_audio=audio_bytes,
+            is_success=True,
+        )
+
+    @classmethod
     async def transcribe_telegram_voice(
-        cls, bot_token: str, file_id: str, mime_type: str = "audio/ogg"
+        cls,
+        bot_token: str,
+        file_id: str,
+        mime_type: str = "audio/ogg",
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        recent_language: Optional[str] = None,
+        message_id: Any = None,
     ) -> Tuple[Optional[str], Optional[bytes]]:
         """
         Downloads a voice note or audio file from Telegram and transcribes it into text.
@@ -269,5 +421,11 @@ class STTService:
         if not audio_bytes:
             return None, None
 
-        transcript = await cls.transcribe_audio_bytes(audio_bytes, mime_type=mime_type)
-        return transcript, audio_bytes
+        stt_result = await cls.transcribe_voice_multilingual(
+            audio_bytes=audio_bytes,
+            mime_type=mime_type,
+            conversation_history=conversation_history,
+            recent_language=recent_language,
+            message_id=message_id,
+        )
+        return (stt_result.transcript if stt_result.is_success else None), audio_bytes

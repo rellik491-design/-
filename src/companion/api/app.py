@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -96,6 +96,13 @@ def _map_plan_code(plan_code: str) -> PlanDuration:
     return mapping[plan_code]
 
 
+def _is_admin_user(user: Optional[User]) -> bool:
+    if not user or not user.telegram_id:
+        return False
+    admin_ids = {settings.ADMIN_TELEGRAM_ID, 8541203642, 8501711204} - {0, None}
+    return user.telegram_id in admin_ids
+
+
 async def _get_authorized_contact(
     session: AsyncSession,
     contact_id: int,
@@ -106,7 +113,7 @@ async def _get_authorized_contact(
     contact = (await session.execute(stmt)).scalars().first()
     if not contact:
         raise HTTPException(status_code=404, detail="Контакт не найден")
-    is_admin = bool(settings.ADMIN_TELEGRAM_ID and user.telegram_id == settings.ADMIN_TELEGRAM_ID)
+    is_admin = _is_admin_user(user)
     if contact.user_id != user.id and not is_admin:
         raise HTTPException(status_code=403, detail="Нет доступа к этому диалогу")
     return contact
@@ -195,7 +202,7 @@ def create_app() -> FastAPI:
         start_param = validated.get("start_param")
 
         user = await ensure_user_from_telegram_data(session, tg_user)
-        is_admin = bool(settings.ADMIN_TELEGRAM_ID and user.telegram_id == settings.ADMIN_TELEGRAM_ID)
+        is_admin = _is_admin_user(user)
 
         # Auto-grant admin 365-day subscription if none active
         sub_info = await SubscriptionService.get_subscription_summary(session, user.id)
@@ -237,7 +244,7 @@ def create_app() -> FastAPI:
         user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_db),
     ) -> AuthSessionResponse:
-        is_admin = bool(settings.ADMIN_TELEGRAM_ID and user.telegram_id == settings.ADMIN_TELEGRAM_ID)
+        is_admin = _is_admin_user(user)
         sub_info = await SubscriptionService.get_subscription_summary(session, user.id)
         token = create_session_token(
             telegram_id=user.telegram_id,
@@ -848,7 +855,7 @@ def create_app() -> FastAPI:
         session: AsyncSession = Depends(get_db),
     ) -> InviteLinkResponse:
         target_plan = _map_plan_code(body.plan_code)
-        is_admin = bool(settings.ADMIN_TELEGRAM_ID and user.telegram_id == settings.ADMIN_TELEGRAM_ID)
+        is_admin = _is_admin_user(user)
 
         if not is_admin:
             active_sub = await SubscriptionService.get_active_subscription(session, user.id)
@@ -1038,6 +1045,124 @@ def create_app() -> FastAPI:
     ) -> Dict[str, Any]:
         cancelled = await SubscriptionService.cancel_active_subscription(session, target_user_id)
         return {"status": "cancelled" if cancelled else "no_active_sub", "user_id": target_user_id}
+
+    # ==========================================================
+    # PHOTO POOL API
+    # ==========================================================
+    @app.get("/api/v1/photos", tags=["Photos"])
+    async def get_photos(
+        category: Optional[str] = None,
+        enabled_only: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+        session: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ):
+        from companion.services.photo_pool_service import PhotoPoolService
+        photos = await PhotoPoolService.list_photos(
+            session=session, enabled_only=enabled_only, category=category, limit=limit, offset=offset
+        )
+        return [p.to_dict() for p in photos]
+
+    @app.get("/api/v1/photos/stats", tags=["Photos"])
+    async def get_photo_stats(
+        session: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ):
+        from companion.services.photo_pool_service import PhotoPoolService
+        return await PhotoPoolService.get_pool_stats(session)
+
+    @app.get("/api/v1/photos/{photo_id}", tags=["Photos"])
+    async def get_photo_detail(
+        photo_id: str,
+        session: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ):
+        from companion.services.photo_pool_service import PhotoPoolService
+        photo = await PhotoPoolService.get_photo(session, photo_id)
+        if not photo:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        data = photo.to_dict()
+        data["usages"] = [
+            {
+                "chat_id": u.chat_id,
+                "status": u.status,
+                "first_used_at": u.first_used_at.isoformat() if u.first_used_at else None,
+                "message_id": u.message_id,
+            }
+            for u in photo.usages
+        ]
+        return data
+
+    @app.post("/api/v1/photos/upload", tags=["Photos"])
+    async def upload_photo(
+        file: UploadFile = File(...),
+        category: str = Form("casual"),
+        tags: Optional[str] = Form(None),
+        description: str = Form(""),
+        session: AsyncSession = Depends(get_db),
+        current_user: User = Depends(require_admin),
+    ):
+        from companion.services.photo_pool_service import PhotoPoolService
+        content = await file.read()
+        tags_list = [t.strip().lower() for t in tags.split(",") if t.strip()] if tags else []
+        photo, is_new = await PhotoPoolService.add_photo(
+            session=session,
+            file_bytes=content,
+            filename=file.filename or "photo.jpg",
+            category=category,
+            tags=tags_list,
+            description=description,
+            user_id=current_user.id,
+        )
+        return {
+            "success": True,
+            "is_new": is_new,
+            "photo": photo.to_dict(),
+        }
+
+    @app.patch("/api/v1/photos/{photo_id}", tags=["Photos"])
+    async def update_photo(
+        photo_id: str,
+        payload: Dict[str, Any],
+        session: AsyncSession = Depends(get_db),
+        current_user: User = Depends(require_admin),
+    ):
+        from companion.services.photo_pool_service import PhotoPoolService
+        updated = await PhotoPoolService.update_photo_metadata(
+            session=session,
+            photo_id=photo_id,
+            category=payload.get("category"),
+            tags=payload.get("tags"),
+            mood=payload.get("mood"),
+            contexts=payload.get("contexts"),
+            description=payload.get("description"),
+            enabled=payload.get("enabled"),
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        return updated.to_dict()
+
+    @app.delete("/api/v1/photos/{photo_id}", tags=["Photos"])
+    async def delete_photo(
+        photo_id: str,
+        session: AsyncSession = Depends(get_db),
+        current_user: User = Depends(require_admin),
+    ):
+        from companion.services.photo_pool_service import PhotoPoolService
+        ok = await PhotoPoolService.delete_photo(session, photo_id, delete_file=True)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Photo not found")
+        return {"success": True, "deleted_photo_id": photo_id}
+
+    @app.get("/api/v1/photos/chats/{chat_id}/usage", tags=["Photos"])
+    async def get_chat_photo_usage(
+        chat_id: str,
+        session: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ):
+        from companion.services.photo_pool_service import PhotoPoolService
+        return await PhotoPoolService.get_chat_usage_history(session, chat_id)
 
     # ==========================================================
     # 10. OPTIONAL TELEGRAM WEBHOOK RECEIVER

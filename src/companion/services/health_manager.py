@@ -110,12 +110,11 @@ class HealthManager:
     @classmethod
     def report_provider_error(cls, error: Any, context: str = "ai_generation") -> None:
         """
-        Records an error and triggers fail-safe PAUSE if the error is critical
-        or if repeated recoverable errors exceed the safety threshold.
+        Records an error and immediately triggers fail-safe PAUSE / shutdown if ANY error occurs
+        that breaks generation or transports, ensuring the bot shuts down before sending fallbacks.
         """
         now = datetime.now(timezone.utc)
         err_str = str(error)
-        err_class = cls.classify_error(error)
 
         cls._consecutive_errors += 1
         cls._consecutive_successes = 0
@@ -123,17 +122,10 @@ class HealthManager:
         cls._last_error = err_str[:300]
         cls._last_error_time = now
 
-        if err_class == "critical":
-            cls._transition_to_paused(
-                reason=f"CRITICAL_PROVIDER_ERROR: {err_str[:120]} (Context: {context})"
-            )
-        elif cls._consecutive_errors >= 5:
-            cls._transition_to_paused(
-                reason=f"EXCESSIVE_FAILURES: {cls._consecutive_errors} consecutive errors (Last: {err_str[:120]})"
-            )
-        elif cls._consecutive_errors >= 2 and cls._state == SystemHealthState.RUNNING:
-            cls._state = SystemHealthState.DEGRADED
-            logger.warning("[HEALTH] System transitioned to DEGRADED state due to consecutive errors: %d", cls._consecutive_errors)
+        # Shut down / pause immediately on any failure to prevent canned fallbacks
+        cls._transition_to_paused(
+            reason=f"СБОЙ В {context}: {err_str[:120]}"
+        )
 
     @classmethod
     def register_error(cls, error: Any, context: str = "ai_generation") -> None:
@@ -142,8 +134,6 @@ class HealthManager:
 
     @classmethod
     def register_success(cls) -> None:
-        """Alias for report_provider_success."""
-        cls.report_provider_success()
         """
         Records a successful operation and smoothly restores RUNNING state if recovering.
         """
@@ -160,8 +150,13 @@ class HealthManager:
                 cls._paused_at = None
 
     @classmethod
+    def report_provider_success(cls) -> None:
+        """Alias for register_success."""
+        cls.register_success()
+
+    @classmethod
     def _transition_to_paused(cls, reason: str) -> None:
-        """Enters the global fail-safe PAUSED state."""
+        """Enters the global fail-safe PAUSED state and immediately sends push alert to admin."""
         cls._state = SystemHealthState.PAUSED
         cls._paused_reason = reason
         cls._paused_at = datetime.now(timezone.utc)
@@ -174,18 +169,23 @@ class HealthManager:
         # Notify administrator asynchronously if admin credentials exist
         try:
             from companion.bot.admin_notifier import AdminNotifier
-            if getattr(settings, "ADMIN_TELEGRAM_ID", None):
-                asyncio.create_task(
-                    AdminNotifier.send_telegram_alert(
-                        f"🚨 <b>АВАРИЙНАЯ ОСТАНОВКА ИИ (FAIL-SAFE PAUSE)</b>\n\n"
-                        f"Бот временно приостановил обработку сообщений во избежание галлюцинаций и зацикливаний.\n\n"
-                        f"⚠️ <b>Причина:</b> <code>{reason}</code>\n"
-                        f"⏳ Бот находится в режиме ожидания восстановления квоты/ключа.",
-                        settings.ADMIN_TELEGRAM_ID,
-                    )
-                )
+            admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", None) or 8501711204
+            alert_text = (
+                f"🚨 <b>АВАРИЙНОЕ ВЫКЛЮЧЕНИЕ БОТА (FAIL-SAFE SHUTDOWN)</b>\n\n"
+                f"⚠️ <b>Произошел сбой:</b> <code>{reason}</code>\n\n"
+                f"🛑 <b>Бот полностью выключен</b> и не отправляет клиентам шаблонные ответы, чтобы не выдать себя и не спамить заглушками.\n\n"
+                f"<i>Для возобновления работы проверьте ошибку и перезапустите бота или используйте команду возобновления.</i>"
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(AdminNotifier.send_telegram_alert(alert_text, admin_id))
+            except RuntimeError:
+                try:
+                    asyncio.run(AdminNotifier.send_telegram_alert(alert_text, admin_id))
+                except Exception:
+                    pass
         except Exception as notify_err:
-            logger.debug("Failed to dispatch admin fail-safe notification: %s", notify_err)
+            logger.warning("Failed to dispatch admin fail-safe notification: %s", notify_err)
 
     @classmethod
     def manual_resume(cls, admin_name: str = "Admin") -> None:

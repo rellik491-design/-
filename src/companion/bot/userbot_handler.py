@@ -131,6 +131,33 @@ class UserbotHandler:
         if not sub:
             return {"action": "ignored", "reason": "subscription_expired"}
 
+        # Section 10 & 11: Message Ownership & Hard Self-Response Block
+        from companion.services.message_ownership_service import MessageOwnershipService
+        sender_type = MessageOwnershipService.classify_message(
+            author_id=sender_tg_id,
+            author_username=sender_username,
+            telegram_message_id=telegram_message_id,
+            chat_id=sender_tg_id,
+        )
+        if sender_type == "BOT":
+            logger.info("[USERBOT_HANDLER] Hard Self-Response Block: author is BOT (%s). Dropping.", sender_tg_id)
+            if telegram_message_id:
+                MessageOwnershipService.register_outgoing_message_memory(sender_tg_id, telegram_message_id)
+            return {"action": "ignored", "reason": "bot_self_message"}
+
+        # Section 12: Idempotency Table Check
+        if telegram_message_id:
+            is_new, _ = await MessageOwnershipService.check_and_record_inbound(
+                session=session,
+                chat_id=sender_tg_id,
+                message_id=telegram_message_id,
+                sender_id=sender_tg_id,
+                sender_type="USER",
+            )
+            if not is_new:
+                logger.info("[USERBOT_HANDLER] Duplicate message (chat=%s, msg_id=%s) already processed. Skipping.", sender_tg_id, telegram_message_id)
+                return {"action": "ignored", "reason": "duplicate_message"}
+
         # 2. Get Persona (prioritizing account-specific persona if account_id is provided)
         persona = None
         if account_id:
@@ -243,6 +270,8 @@ class UserbotHandler:
         # Transcribe any voice messages in the batch that haven't been transcribed yet
         t_stt_start = time.perf_counter()
         voice_transcription_s = 0.0
+        from companion.services.multilingual_service import MultilingualService
+
         for b_item in batch_inputs:
             if b_item["is_voice"]:
                 cur_txt = b_item["text"]
@@ -258,6 +287,19 @@ class UserbotHandler:
                     )
                     if transcript and transcript.strip():
                         b_item["text"] = transcript.strip()
+                        det = MultilingualService.detect_language(
+                            text=transcript.strip(),
+                            recent_language=contact.language,
+                        )
+                        norm = MultilingualService.normalize_slang(
+                            text=transcript.strip(),
+                            language=det.language,
+                            recent_language=contact.language,
+                        )
+                        b_item["language"] = det.language
+                        b_item["language_confidence"] = det.confidence
+                        b_item["stt_confidence"] = 0.94
+                        b_item["normalized_text"] = norm.normalized_text
                         b_item["transcription_failed"] = False
                     else:
                         b_item["text"] = ResponsePlanner.VOICE_FAILED_MARKER
@@ -265,6 +307,30 @@ class UserbotHandler:
                 elif needs_stt and not b_item.get("voice_file_id"):
                     b_item["text"] = ResponsePlanner.VOICE_FAILED_MARKER
                     b_item["transcription_failed"] = True
+            else:
+                txt = b_item.get("text") or ""
+                if txt:
+                    det = MultilingualService.detect_language(
+                        text=txt,
+                        recent_language=contact.language,
+                    )
+                    norm = MultilingualService.normalize_slang(
+                        text=txt,
+                        language=det.language,
+                        recent_language=contact.language,
+                    )
+                    b_item["language"] = det.language
+                    b_item["language_confidence"] = det.confidence
+                    b_item["normalized_text"] = norm.normalized_text
+                    MultilingualService.log_developer_debug(
+                        message_id=b_item.get("message_id"),
+                        message_type="text",
+                        language=det.language,
+                        language_confidence=det.confidence,
+                        transcript=txt,
+                        normalized_text=norm.normalized_text,
+                        stt_confidence=1.0,
+                    )
         voice_transcription_s = time.perf_counter() - t_stt_start
 
         batch_inputs = [b for b in batch_inputs if b.get("text") or b.get("is_voice")]
@@ -414,6 +480,10 @@ class UserbotHandler:
                 batch_id=batch_id,
                 is_violation=is_violation if idx_b == len(batch_inputs) - 1 else False,
                 violation_analysis=(violation_analysis if is_violation and idx_b == len(batch_inputs) - 1 else None),
+                detected_language=b_item.get("language"),
+                language_confidence=b_item.get("language_confidence"),
+                stt_confidence=b_item.get("stt_confidence"),
+                normalized_text=b_item.get("normalized_text"),
                 created_at=b_item["created_at"],
             )
             session.add(in_msg)
@@ -485,21 +555,48 @@ class UserbotHandler:
             if u.get("text") and u.get("text") != ResponsePlanner.VOICE_FAILED_MARKER
         )
 
-        # 5. Detect City / Timezone clues across unread batch
-        city, tz = TimezoneService.detect_city_and_timezone(all_unread_text)
-        if city and tz:
-            contact.detected_city = city
-            contact.detected_timezone = tz
+        # 5. Immigrant Geography & Multidimensional Profile (Origin != Location != Timezone != Language)
+        from companion.services.user_geography_service import UserGeographyService
+        user_geo_profile, geo_updated = UserGeographyService.analyze_and_update_geography(contact, all_unread_text)
+        if geo_updated:
             await session.commit()
 
-        # 5b. Detect Language (strictly Russian default, ignore Ukrainian, English only if 100% Latin)
-        has_cyrillic = bool(re.search(r"[\u0400-\u04FF]", all_unread_text))
-        has_latin = bool(re.search(r"[a-zA-Z]", all_unread_text))
-        if has_cyrillic:
-            contact.language = "ru"
-        elif has_latin and len(all_unread_text.strip().split()) >= 1:
-            contact.language = "en"
+        # 5b. Multilingual Language Detection & Rolling Preference (Russian, Ukrainian, Mixed, English)
+        import json
+        from companion.services.multilingual_service import MultilingualService
+
+        batch_lang_res = MultilingualService.detect_language(
+            text=all_unread_text,
+            recent_language=contact.language,
+        )
+        pref_update = MultilingualService.update_language_preference(
+            current_pref_json=contact.language_preference,
+            incoming_language=batch_lang_res.language,
+            confidence=batch_lang_res.confidence,
+        )
+        contact.language_preference = json.dumps(pref_update["language_preference"])
+        contact.language = pref_update["current_user_language"]
+        contact.recent_language = pref_update["recent_language"]
+        contact.language_pattern = pref_update["language_pattern"]
         await session.commit()
+
+        # Dynamic Language Profile & Mirroring Analysis
+        history = AIService.get_chat_history(contact.id)
+        dynamic_lang_profile = MultilingualService.analyze_dynamic_language(
+            text=all_unread_text,
+            conversation_history=history,
+            contact=contact,
+        )
+
+        # Anti-Instagram & Personal Contact Deflection Tracking
+        contact_deflection = IntentService.detect_contact_request(
+            all_unread_text,
+            contact_deflection_count=contact.contact_deflection_count or 0,
+        )
+        if contact_deflection.deflection_required:
+            contact.contact_deflection_count = (contact.contact_deflection_count or 0) + 1
+            contact.last_contact_request_at = now or datetime.now(timezone.utc)
+            await session.commit()
 
         # 5c. Extract and store persistent Long-Term Memories (facts, preferences, habits, agreements)
         from companion.ai.memory_manager import MemoryManager
@@ -540,19 +637,90 @@ class UserbotHandler:
                 "unread_batch": unread_batch_dicts,
             }
 
-        # 7. Check Photo Request
+        # 7. Check Photo Request & Contextual Photo Selection (Photo Pool)
+        from companion.services.photo_pool_service import PhotoPoolService
         photo_intent = IntentService.detect_photo_request(all_unread_text)
         photo_asset = None
+        ai_photo_context = ""
+        chat_key = str(contact.tg_id or contact.id)
+        current_hour = (now or datetime.now(timezone.utc)).hour
+
         if photo_intent.requested:
-            photo_asset = await MediaService.get_photo_for_contact(
-                session=session,
-                user_id=user_id,
-                contact_id=contact.id,
-                preferred_tag=photo_intent.preferred_tag,
+            if photo_intent.is_repeat_request:
+                # Interlocutor asks for the exact same previous photo -> Absolute no-repeat rule
+                ai_photo_context = (
+                    "\n[ПРИМЕЧАНИЕ СИСТЕМЫ: Собеседник просит повторно скинуть то же самое фото, "
+                    "которое ты уже отправляла раньше. Ты помнишь это и естественно/с юмором отвечаешь, "
+                    "что уже показывала его (например: 'я же тебе уже скидывала)', 'ты уже видел)', "
+                    "'второй раз не покажу)'), повторно фото НЕ отправляешь.]"
+                )
+            else:
+                # Explicit user request -> reserve candidate (bypasses cooldown, strictly enforces no-repeat!)
+                photo_asset = await PhotoPoolService.select_and_reserve_photo(
+                    session=session,
+                    chat_id=chat_key,
+                    preferred_category=photo_intent.preferred_category,
+                    preferred_tags=photo_intent.preferred_tags,
+                    is_explicit_request=True,
+                    current_hour=current_hour,
+                    reason=photo_intent.reason or "explicit_user_request",
+                    user_id=user_id,
+                )
+                if not photo_asset:
+                    # Fallback to legacy MediaService only if PhotoPool had no candidate
+                    photo_asset = await MediaService.get_photo_for_contact(
+                        session=session,
+                        user_id=user_id,
+                        contact_id=contact.id,
+                        preferred_tag=photo_intent.preferred_tag,
+                    )
+
+                if photo_asset:
+                    p_desc = getattr(photo_asset, "description", "")
+                    p_cat = getattr(photo_asset, "category", getattr(photo_asset, "tag", ""))
+                    ai_photo_context = (
+                        f"\n[ПРИМЕЧАНИЕ СИСТЕМЫ: К твоему сообщению прикрепляется твое фото (категория: {p_cat}, "
+                        f"описание: '{p_desc}'). Сделай реплику живой и естественной, не пиши банально 'вот фото'.]"
+                    )
+        else:
+            # Conservative spontaneous photo evaluation (rare moments, respecting cooldowns)
+            freq_ok, _ = await PhotoPoolService.check_chat_frequency_limits(
+                session=session, chat_id=chat_key, is_explicit_request=False, now=now
             )
+            if freq_ok:
+                spontaneous_triggers = [
+                    r"\b(что\s+делаешь|чем\s+занята|где\s+ты|куда\s+идешь|как\s+ты|що\s+робиш|де\s+ти)\b",
+                ]
+                if any(re.search(pat, all_unread_text.lower()) for pat in spontaneous_triggers):
+                    photo_asset = await PhotoPoolService.select_and_reserve_photo(
+                        session=session,
+                        chat_id=chat_key,
+                        preferred_category=None,
+                        is_explicit_request=False,
+                        current_hour=current_hour,
+                        reason="spontaneous_contextual",
+                        user_id=user_id,
+                    )
+                    if photo_asset:
+                        p_desc = getattr(photo_asset, "description", "")
+                        p_cat = getattr(photo_asset, "category", "")
+                        ai_photo_context = (
+                            f"\n[ПРИМЕЧАНИЕ СИСТЕМЫ: Ты спонтанно делишься с собеседником фотографией из момента "
+                            f"(категория: {p_cat}, описание: '{p_desc}'). Добавь легкий живой комментарий к фото.]"
+                        )
 
         # 8. Format conversational turn (preserving text, [VOICE MESSAGE] transcription, and [msg_id=...])
         ai_turn_input = ResponsePlanner.format_batch_for_ai(unread_batch_dicts)
+        if ai_photo_context:
+            ai_turn_input += ai_photo_context
+
+        # Determine target message ID for reply validation (Sections 16, 17)
+        primary_target_msg_id = None
+        if unread_batch_dicts:
+            for u_item in reversed(unread_batch_dicts):
+                if u_item.get("message_id"):
+                    primary_target_msg_id = u_item["message_id"]
+                    break
 
         # Generate Text Reply with multi-level context & bounded recent history (ONE AI Call per batch)
         t_ai_start = time.perf_counter()
@@ -568,22 +736,16 @@ class UserbotHandler:
                     voice_duration=total_voice_dur,
                     session=session,
                     incoming_batch=unread_batch_dicts,
+                    dynamic_language_profile=dynamic_lang_profile,
+                    contact_deflection=contact_deflection,
+                    user_geo_profile=user_geo_profile,
+                    response_target_id=primary_target_msg_id,
+                    response_target_sender="USER",
                 )
             except TypeError:
-                try:
-                    reply_text = await AIService.generate_reply(
-                        persona=persona,
-                        contact=contact,
-                        chat_history=history,
-                        new_incoming_message=ai_turn_input,
-                        is_voice=any_voice,
-                        voice_duration=total_voice_dur,
-                    )
-                except TypeError:
-                    # Backward-compatible fallback for 4-arg legacy mocks
-                    reply_text = await AIService.generate_reply(
-                        persona, contact, history, ai_turn_input
-                    )
+                reply_text = await AIService.generate_reply(
+                    persona, contact, history, ai_turn_input
+                )
         except Exception as ai_err:
             # Mark batch as FAILED so messages are never lost and can be recovered
             for r in pending_unread_rows:
@@ -592,7 +754,13 @@ class UserbotHandler:
             for m_obj in inserted_msgs:
                 m_obj.processing_status = "FAILED"
             await session.commit()
-            raise ai_err
+            from companion.services.health_manager import HealthManager
+            HealthManager.report_provider_error(ai_err, context="userbot_handler_ai_generation")
+            return {
+                "action": "paused_due_to_error",
+                "reason": str(ai_err),
+                "contact": contact,
+            }
 
         if not reply_text:
             logger.info("[USERBOT_HANDLER] Empty reply generated (Safe silence). No messages sent to user.")
@@ -631,6 +799,17 @@ class UserbotHandler:
             voice_tag = "adaptive_all"
 
         detected_event = getattr(contact, "last_event", None)
+        if not detected_event:
+            meetup_intent = IntentService.detect_meetup_proposal(all_unread_text)
+            meetup_agreed = IntentService.detect_meetup_agreement(all_unread_text)
+            if meetup_agreed and getattr(contact, "funnel_stage", "") in ("date_proposed", "quest_offered", "quest_agreed"):
+                detected_event = "QUEST_AGREED"
+                setattr(contact, "last_event", "QUEST_AGREED")
+                contact.funnel_stage = "quest_agreed"
+            elif meetup_intent.is_proposal or meetup_agreed:
+                detected_event = "DATE_PROPOSED"
+                setattr(contact, "last_event", "DATE_PROPOSED")
+                contact.funnel_stage = "date_proposed"
 
         # Transition all messages in this batch to PROCESSED and store outgoing bot response
         for r in pending_unread_rows:
@@ -659,6 +838,17 @@ class UserbotHandler:
         # Update rolling ConversationSummary & cumulative topics/summary without overwriting prior turns
         recent_for_summary = await MemoryManager.get_recent_messages(session, contact.id, limit=12)
         await MemoryManager.update_conversation_summary(session, contact, recent_for_summary)
+
+        # Periodic LLM memory consolidation so location, origin, plans, and self-facts are refreshed
+        if not os.environ.get("PYTEST_CURRENT_TEST") and (
+            (contact.total_messages_in or 0) % 3 == 0
+            or ((contact.total_messages_in or 0) >= 2 and not contact.detected_city)
+        ):
+            try:
+                recent_for_llm = await MemoryManager.get_recent_messages(session, contact.id, limit=16)
+                await MemoryManager.refresh_memory_with_llm(session, contact, persona, recent_for_llm)
+            except Exception as mem_err:
+                logger.debug("Periodic LLM memory refresh skipped: %s", mem_err)
 
         # 9. Update stats
         contact.total_messages_out += max(1, len(response_plan["messages"]))
@@ -711,6 +901,7 @@ class UserbotHandler:
             "batch_size": len(unread_batch_dicts),
             "metrics": metrics,
             "photo_asset": photo_asset,
+            "photo_pool_asset": photo_asset,
             "voice_tag": voice_tag,
             "simulated_delay_sec": 0.0,
             "contact": contact,

@@ -22,21 +22,77 @@ class GeminiClient:
 
     DEFAULT_FALLBACK_MODELS = [
         "gemini-flash-lite-latest",
+        "gemini-3.8-flash",
         "gemini-3.1-flash-lite",
         "gemini-3.5-flash-lite",
         "gemini-flash-latest",
         "gemini-pro-latest",
     ]
 
+    VERTEX_CANDIDATE_MODELS = [
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-pro",
+        "gemini-2.5-pro",
+    ]
+
+    _active_key_index: int = 0
+
     @classmethod
     def get_api_key(cls, explicit_key: Optional[str] = None) -> Optional[str]:
-        return explicit_key or settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")
+        keys = cls.get_api_keys(explicit_key)
+        return keys[0] if keys else None
+
+    @classmethod
+    def get_api_keys(cls, explicit_key: Optional[str] = None) -> List[str]:
+        """
+        Returns an ordered list of configured API keys for automatic failover and rotation.
+        """
+        keys: List[str] = []
+        if explicit_key and explicit_key.strip():
+            keys.append(explicit_key.strip())
+
+        # Check settings.GEMINI_API_KEYS
+        env_keys = getattr(settings, "GEMINI_API_KEYS", None) or os.environ.get("GEMINI_API_KEYS", "")
+        if isinstance(env_keys, str) and env_keys.strip():
+            for k in env_keys.replace(";", ",").replace("\n", ",").split(","):
+                k = k.strip()
+                if k and k not in keys:
+                    keys.append(k)
+        elif isinstance(env_keys, (list, tuple)):
+            for k in env_keys:
+                k = str(k).strip()
+                if k and k not in keys:
+                    keys.append(k)
+
+        # Fallback to single GEMINI_API_KEY
+        single = getattr(settings, "GEMINI_API_KEY", None) or os.environ.get("GEMINI_API_KEY", "")
+        if single and str(single).strip() and str(single).strip() not in keys:
+            keys.append(str(single).strip())
+
+        return keys
+
+    @classmethod
+    def rotate_to_next_key(cls, failed_key: Optional[str] = None) -> Optional[str]:
+        """Advances active key pointer to the next key in the pool."""
+        keys = cls.get_api_keys()
+        if not keys:
+            return None
+        if failed_key and failed_key in keys:
+            curr = keys.index(failed_key)
+            cls._active_key_index = (curr + 1) % len(keys)
+        else:
+            cls._active_key_index = (cls._active_key_index + 1) % len(keys)
+        return keys[cls._active_key_index]
 
     @classmethod
     def get_candidate_models(cls, primary_model: Optional[str] = None) -> List[str]:
-        first = primary_model or settings.GEMINI_MODEL or "gemini-flash-latest"
+        use_vertex = getattr(settings, "USE_VERTEX_AI", False)
+        base_models = cls.VERTEX_CANDIDATE_MODELS if use_vertex else cls.DEFAULT_FALLBACK_MODELS
+        first = primary_model or settings.GEMINI_MODEL or (base_models[0])
         models = [first]
-        for m in cls.DEFAULT_FALLBACK_MODELS:
+        for m in base_models:
             if m not in models:
                 models.append(m)
         return models
@@ -57,8 +113,9 @@ class GeminiClient:
         Executes a Gemini generation call with retries, timeout, and model fallback.
         Returns the generated text or None if all attempts fail.
         """
-        resolved_key = cls.get_api_key(api_key)
-        if not resolved_key:
+        use_vertex = getattr(settings, "USE_VERTEX_AI", False)
+        candidate_keys = cls.get_api_keys(api_key)
+        if not use_vertex and not candidate_keys:
             return None
 
         timeout = timeout_seconds or getattr(settings, "GEMINI_TIMEOUT_SECONDS", 25.0)
@@ -72,7 +129,6 @@ class GeminiClient:
             logger.error("google-genai package is not installed")
             return None
 
-        client = genai.Client(api_key=resolved_key)
         config_kwargs: Dict[str, Any] = {
             "temperature": temperature,
             "max_output_tokens": max_output_tokens,
@@ -85,73 +141,140 @@ class GeminiClient:
         start_ts = time.perf_counter()
         last_error: Optional[Exception] = None
 
-        for model_name in candidate_models:
-            for attempt in range(retries + 1):
-                attempt_start = time.perf_counter()
-                try:
-                    resp = await asyncio.wait_for(
-                        cls._invoke_sdk(client, model_name, contents, gen_config),
-                        timeout=timeout,
-                    )
-                    duration_ms = round((time.perf_counter() - attempt_start) * 1000, 1)
-                    if resp and getattr(resp, "text", None):
-                        logger.info(
-                            "gemini_generate_success model=%s attempt=%d duration_ms=%s",
+        # 1. Primary Vertex AI attempt (if explicitly enabled)
+        if use_vertex:
+            client = genai.Client(
+                vertexai=True,
+                project=getattr(settings, "VERTEX_PROJECT", "gen-lang-client-0915483038"),
+                location=getattr(settings, "VERTEX_LOCATION", "us-central1"),
+            )
+            for model_name in candidate_models:
+                for attempt in range(retries + 1):
+                    attempt_start = time.perf_counter()
+                    try:
+                        resp = await asyncio.wait_for(
+                            cls._invoke_sdk(client, model_name, contents, gen_config),
+                            timeout=timeout,
+                        )
+                        duration_ms = round((time.perf_counter() - attempt_start) * 1000, 1)
+                        if resp and getattr(resp, "text", None):
+                            logger.info(
+                                "vertex_generate_success model=%s attempt=%d duration_ms=%s",
+                                model_name,
+                                attempt + 1,
+                                duration_ms,
+                            )
+                            return resp.text.strip()
+                    except asyncio.TimeoutError as e:
+                        last_error = e
+                    except Exception as e:
+                        last_error = e
+                        err_str = str(e)
+                        if "404" in err_str or "NOT_FOUND" in err_str:
+                            break
+                        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                            if attempt < retries:
+                                await asyncio.sleep(1.0 * (2 ** attempt))
+                                continue
+                            break
+                    if attempt < retries:
+                        await asyncio.sleep(0.4 * (2 ** attempt))
+
+            if not candidate_keys:
+                logger.error("vertex_failed_and_no_fallback_keys last_error=%s", last_error)
+                return None
+            logger.warning("[VERTEX_AI] Vertex AI failed (%s). Falling back to Gemini API Key Rotation Pool...", last_error)
+
+        # 2. Key Rotation Pool (Tries keys in order, rotating upon error)
+        start_idx = cls._active_key_index % len(candidate_keys)
+        ordered_keys = candidate_keys[start_idx:] + candidate_keys[:start_idx]
+
+        for current_key in ordered_keys:
+            masked_key = (
+                f"{current_key[:6]}...{current_key[-4:]}"
+                if len(current_key) > 12
+                else "***"
+            )
+            client = genai.Client(api_key=current_key)
+            key_exhausted_or_invalid = False
+
+            for model_name in candidate_models:
+                if key_exhausted_or_invalid:
+                    break
+
+                for attempt in range(retries + 1):
+                    attempt_start = time.perf_counter()
+                    try:
+                        resp = await asyncio.wait_for(
+                            cls._invoke_sdk(client, model_name, contents, gen_config),
+                            timeout=timeout,
+                        )
+                        duration_ms = round((time.perf_counter() - attempt_start) * 1000, 1)
+                        if resp and getattr(resp, "text", None):
+                            # Retain active working key for subsequent requests
+                            cls._active_key_index = candidate_keys.index(current_key)
+                            logger.info(
+                                "gemini_generate_success key=%s model=%s attempt=%d duration_ms=%s",
+                                masked_key,
+                                model_name,
+                                attempt + 1,
+                                duration_ms,
+                            )
+                            return resp.text.strip()
+                    except asyncio.TimeoutError as e:
+                        last_error = e
+                        logger.warning(
+                            "gemini_generate_timeout key=%s model=%s attempt=%d timeout_s=%s",
+                            masked_key,
                             model_name,
                             attempt + 1,
-                            duration_ms,
+                            timeout,
                         )
-                        return resp.text.strip()
-                except asyncio.TimeoutError as e:
-                    last_error = e
-                    logger.warning(
-                        "gemini_generate_timeout model=%s attempt=%d timeout_s=%s",
-                        model_name,
-                        attempt + 1,
-                        timeout,
-                    )
-                except Exception as e:
-                    last_error = e
-                    err_str = str(e)
-                    logger.warning(
-                        "gemini_generate_error model=%s attempt=%d error=%s",
-                        model_name,
-                        attempt + 1,
-                        err_str[:200],
-                    )
-                    # If model not found (404), switch to next candidate model immediately
-                    if "404" in err_str or "NOT_FOUND" in err_str:
-                        break
+                    except Exception as e:
+                        last_error = e
+                        err_str = str(e)
+                        logger.warning(
+                            "gemini_generate_error key=%s model=%s attempt=%d error=%s",
+                            masked_key,
+                            model_name,
+                            attempt + 1,
+                            err_str[:200],
+                        )
 
-                    # If model high demand / temporary overload (503), switch immediately
-                    if "503" in err_str or "UNAVAILABLE" in err_str:
-                        logger.warning("[GEMINI] Model %s 503 unavailable. Falling back immediately...", model_name)
-                        break
-
-                    # If daily quota limit exceeded on this model, switch to next model immediately
-                    if "per day" in err_str.lower() or "generaterequestsperday" in err_str.lower():
-                        logger.warning("[GEMINI] Daily quota exceeded for %s. Falling back to alternative model...", model_name)
-                        break
-
-                    # If temporary rate limit (429 / RPM), backoff and retry this model
-                    if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                        if attempt < retries:
-                            backoff = 1.2 * (2 ** attempt)
-                            logger.info("[GEMINI] Rate limited on %s. Retrying in %.1fs...", model_name, backoff)
-                            await asyncio.sleep(backoff)
-                            continue
-                        else:
+                        # Model not available or retired: switch candidate model on same key
+                        if "404" in err_str or "NOT_FOUND" in err_str or "no longer available" in err_str:
                             break
 
-                if attempt < retries:
-                    await asyncio.sleep(0.4 * (2 ** attempt))
+                        # Model temporarily unavailable: switch candidate model
+                        if "503" in err_str or "UNAVAILABLE" in err_str:
+                            logger.warning("[GEMINI] Model %s 503 unavailable. Falling back to next model...", model_name)
+                            break
+
+                        # Key-level errors: Auth/disabled (401), Rate limit (429), payment/prepay (402), forbidden (403), daily quota
+                        if any(sig in err_str.lower() for sig in [
+                            "401", "unauthenticated", "account_state_invalid", "deleted or disabled",
+                            "429", "resource_exhausted", "402", "prepayment", "depleted",
+                            "403", "permission_denied", "quota", "per day", "api key not valid"
+                        ]):
+                            logger.warning(
+                                "[GEMINI_ROTATION] Key %s encountered error (%s). Rotating to next key in pool...",
+                                masked_key,
+                                err_str[:120],
+                            )
+                            key_exhausted_or_invalid = True
+                            cls.rotate_to_next_key(current_key)
+                            break
+
+                    if attempt < retries:
+                        await asyncio.sleep(0.4 * (2 ** attempt))
 
         total_ms = round((time.perf_counter() - start_ts) * 1000, 1)
         logger.error(
-            "gemini_all_models_failed total_ms=%s last_error=%s",
+            "gemini_all_keys_and_models_failed total_ms=%s last_error=%s",
             total_ms,
             str(last_error)[:200] if last_error else "empty_response",
         )
+        return None
         return None
 
     @classmethod

@@ -25,8 +25,11 @@ class PronunciationEntry:
     normalized: str
     pronunciation: str
     stress: Optional[str] = None
+    stressed_spelling: Optional[str] = None
+    phonetic_override: Optional[str] = None
     ipa: Optional[str] = None
     confidence: float = 0.95
+    contexts: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -54,17 +57,18 @@ class PronunciationDictionary:
     """
     Persistent Pronunciation Dictionary (Section 2 & 19).
     Stores lexical stress, Russian messaging slang, and pronunciation overrides.
+    Maintains authentic Russian vowel reduction and soft Cyrillic 'е'.
     """
 
     DEFAULT_DICTIONARY_PATH = Path("assets/pronunciation_dictionary.json")
 
     # Initial linguistic foundation for Russian conversational Telegram speech
     SEED_ENTRIES: Dict[str, Dict[str, Any]] = {
-        # Social & Messenger Terminology
-        "гс": {"normalized": "гс", "pronunciation": "гэ э́с", "stress": "2", "confidence": 1.0},
-        "вк": {"normalized": "вк", "pronunciation": "вэ ка́", "stress": "2", "confidence": 1.0},
-        "тг": {"normalized": "тг", "pronunciation": "тэ гэ́", "stress": "2", "confidence": 1.0},
-        "лс": {"normalized": "лс", "pronunciation": "эл э́с", "stress": "2", "confidence": 1.0},
+        # Social & Messenger Terminology (Spoken Conversational Expansions)
+        "гс": {"normalized": "гс", "pronunciation": "голосовое", "stress": "4", "confidence": 1.0},
+        "вк": {"normalized": "вк", "pronunciation": "вконтакте", "stress": "2", "confidence": 1.0},
+        "тг": {"normalized": "тг", "pronunciation": "телеграм", "stress": "3", "confidence": 1.0},
+        "лс": {"normalized": "лс", "pronunciation": "личку", "stress": "1", "confidence": 1.0},
         "смс": {"normalized": "смс", "pronunciation": "эс эм э́с", "stress": "3", "confidence": 1.0},
         "смски": {"normalized": "смски", "pronunciation": "эс эм э́ски", "stress": "3", "confidence": 1.0},
         "смску": {"normalized": "смску", "pronunciation": "эс эм э́ску", "stress": "3", "confidence": 1.0},
@@ -95,9 +99,27 @@ class PronunciationDictionary:
         "кринжово": {"normalized": "кринжово", "pronunciation": "кринжо́во", "stress": "2", "confidence": 1.0},
         "краш": {"normalized": "краш", "pronunciation": "краш", "stress": "1", "confidence": 1.0},
         "крашиха": {"normalized": "крашиха", "pronunciation": "краши́ха", "stress": "2", "confidence": 1.0},
-        "трек": {"normalized": "трек", "pronunciation": "трэк", "stress": "1", "confidence": 1.0},
-        "треки": {"normalized": "треки", "pronunciation": "трэ́ки", "stress": "1", "confidence": 1.0},
-        "трека": {"normalized": "трека", "pronunciation": "трэ́ка", "stress": "1", "confidence": 1.0},
+        # Russian "Е" & Word Preservations (Strictly natural soft Cyrillic 'е', NEVER 'э'!)
+        "трек": {"normalized": "трек", "pronunciation": "трек", "stress": "1", "confidence": 1.0},
+        "треки": {"normalized": "треки", "pronunciation": "тре́ки", "stress": "1", "confidence": 1.0},
+        "трека": {"normalized": "трека", "pronunciation": "тре́ка", "stress": "1", "confidence": 1.0},
+        "кофе": {"normalized": "кофе", "pronunciation": "ко́фе", "stress": "1", "confidence": 1.0},
+        "кафе": {"normalized": "кафе", "pronunciation": "кафе́", "stress": "2", "confidence": 1.0},
+        "тебе": {"normalized": "тебе", "pronunciation": "тебе́", "stress": "2", "confidence": 1.0},
+        "сегодня": {"normalized": "сегодня", "pronunciation": "сего́дня", "stress": "2", "confidence": 1.0},
+        "вместе": {"normalized": "вместе", "pronunciation": "вме́сте", "stress": "1", "confidence": 1.0},
+        "вечер": {"normalized": "вечер", "pronunciation": "ве́чер", "stress": "1", "confidence": 1.0},
+        "вечером": {"normalized": "вечером", "pronunciation": "ве́чером", "stress": "1", "confidence": 1.0},
+        "дело": {"normalized": "дело", "pronunciation": "де́ло", "stress": "1", "confidence": 1.0},
+        "дела": {"normalized": "дела", "pronunciation": "дела́", "stress": "2", "confidence": 1.0},
+        "успеть": {"normalized": "успеть", "pronunciation": "успе́ть", "stress": "2", "confidence": 1.0},
+        "интернет": {"normalized": "интернет", "pronunciation": "интерне́т", "stress": "3", "confidence": 1.0},
+        "модель": {"normalized": "модель", "pronunciation": "моде́ль", "stress": "2", "confidence": 1.0},
+        "проект": {"normalized": "проект", "pronunciation": "прое́кт", "stress": "2", "confidence": 1.0},
+        "тема": {"normalized": "тема", "pronunciation": "те́ма", "stress": "1", "confidence": 1.0},
+        "текст": {"normalized": "текст", "pronunciation": "те́кст", "stress": "1", "confidence": 1.0},
+        "музей": {"normalized": "музей", "pronunciation": "музе́й", "stress": "2", "confidence": 1.0},
+        "бассейн": {"normalized": "бассейн", "pronunciation": "бассе́йн", "stress": "2", "confidence": 1.0},
         "чат": {"normalized": "чат", "pronunciation": "чат", "stress": "1", "confidence": 1.0},
         "чате": {"normalized": "чате", "pronunciation": "ча́те", "stress": "1", "confidence": 1.0},
         "чатик": {"normalized": "чатик", "pronunciation": "ча́тик", "stress": "1", "confidence": 1.0},
@@ -106,8 +128,6 @@ class PronunciationDictionary:
         "гифка": {"normalized": "гифка", "pronunciation": "ги́фка", "stress": "1", "confidence": 1.0},
         "гифку": {"normalized": "гифку", "pronunciation": "ги́фку", "stress": "1", "confidence": 1.0},
         "гифки": {"normalized": "гифки", "pronunciation": "ги́фки", "stress": "1", "confidence": 1.0},
-        "кофе": {"normalized": "кофе", "pronunciation": "ко́фэ", "stress": "1", "confidence": 1.0},
-        "кафе": {"normalized": "кафе", "pronunciation": "кафэ́", "stress": "2", "confidence": 1.0},
         "инфо": {"normalized": "инфо", "pronunciation": "и́нфо", "stress": "1", "confidence": 1.0},
         # Mobile & Irregular Russian Word Stresses
         "занята": {"normalized": "занята", "pronunciation": "занята́", "stress": "3", "confidence": 1.0},
@@ -123,12 +143,18 @@ class PronunciationDictionary:
         "включат": {"normalized": "включат", "pronunciation": "включа́т", "stress": "2", "confidence": 1.0},
         "красивее": {"normalized": "красивее", "pronunciation": "краси́вее", "stress": "2", "confidence": 1.0},
         "облегчит": {"normalized": "облегчит", "pronunciation": "облегчи́т", "stress": "3", "confidence": 1.0},
+        "одновременно": {"normalized": "одновременно", "pronunciation": "одновреме́нно", "stress": "4", "confidence": 1.0},
         "договор": {"normalized": "договор", "pronunciation": "догово́р", "stress": "3", "confidence": 1.0},
         "договоры": {"normalized": "договоры", "pronunciation": "догово́ры", "stress": "3", "confidence": 1.0},
         "договора": {"normalized": "договора", "pronunciation": "догово́ры", "stress": "3", "confidence": 1.0},
         "торты": {"normalized": "торты", "pronunciation": "то́рты", "stress": "1", "confidence": 1.0},
         "банты": {"normalized": "банты", "pronunciation": "ба́нты", "stress": "1", "confidence": 1.0},
         "шарфы": {"normalized": "шарфы", "pronunciation": "ша́рфы", "stress": "1", "confidence": 1.0},
+        "каталог": {"normalized": "каталог", "pronunciation": "катало́г", "stress": "3", "confidence": 1.0},
+        "жалюзи": {"normalized": "жалюзи", "pronunciation": "жалюзи́", "stress": "3", "confidence": 1.0},
+        "мастерски": {"normalized": "мастерски", "pronunciation": "мастерски́", "stress": "4", "confidence": 1.0},
+        "эксперт": {"normalized": "эксперт", "pronunciation": "экспе́рт", "stress": "2", "confidence": 1.0},
+        "квартал": {"normalized": "квартал", "pronunciation": "кварта́л", "stress": "2", "confidence": 1.0},
     }
 
     def __init__(self, file_path: Optional[Path] = None):
@@ -147,9 +173,35 @@ class PronunciationDictionary:
                             normalized=v.get("normalized", k),
                             pronunciation=v.get("pronunciation", k),
                             stress=v.get("stress"),
+                            stressed_spelling=v.get("stressed_spelling"),
+                            phonetic_override=v.get("phonetic_override"),
                             ipa=v.get("ipa"),
                             confidence=v.get("confidence", 0.95),
+                            contexts=v.get("contexts", []),
                         )
+                # Auto-upgrade any legacy dictionary entries with open-э or letter-by-letter mistakes
+                changed = False
+                for k, seed_v in self.SEED_ENTRIES.items():
+                    norm_k = k.lower()
+                    if norm_k in self.entries:
+                        current_p = self.entries[norm_k].pronunciation
+                        if norm_k in ("кофе", "кафе", "трек", "треки", "трека") and "э" in current_p:
+                            self.entries[norm_k].pronunciation = seed_v["pronunciation"]
+                            changed = True
+                        elif norm_k in ("гс", "тг", "лс", "вк") and (" " in current_p or "э" in current_p):
+                            self.entries[norm_k].pronunciation = seed_v["pronunciation"]
+                            changed = True
+                    else:
+                        self.entries[norm_k] = PronunciationEntry(
+                            normalized=seed_v["normalized"],
+                            pronunciation=seed_v["pronunciation"],
+                            stress=seed_v.get("stress"),
+                            ipa=seed_v.get("ipa"),
+                            confidence=seed_v.get("confidence", 0.95),
+                        )
+                        changed = True
+                if changed:
+                    self.save()
                 return
             except Exception as e:
                 logger.warning("Failed to load pronunciation dictionary from %s: %s", self.file_path, e)
@@ -496,7 +548,6 @@ class SpokenTextTransformer:
         r"\bсвое\b": "своё",
         r"\bее\b": "её",
         r"\bнее\b": "неё",
-        r"\bокей\b": "окэй",
         r"\bчерт\b": "чёрт",
     }
 
@@ -530,7 +581,12 @@ class SpokenTextTransformer:
         # 6. Strip decorative laughter tokens
         clean = re.sub(r"(?i)\b(ахахах+|ахах|хахах+|хаха|хех|хихи|hehe|haha|lmao|lol)\b", "", clean)
 
-        # 7. Convert numbers to Russian words
+        # 7. Section 4 & 5: Dedicated Slang & Abbreviation Normalization Layer
+        # Context-aware expansion of 'гс', 'лс', 'тг', 'вк', 'мб', 'крч', 'спс', 'пж' and proper words 'лол', 'кек', 'изи', 'имхо'
+        from companion.services.slang_pronunciation_layer import SlangAbbreviationAnalyzer
+        clean, slang_decisions = SlangAbbreviationAnalyzer.normalize_slang(clean)
+
+        # 8. Convert numbers to Russian words
         if digits_to_words_fn:
             clean = digits_to_words_fn(clean)
 
@@ -623,6 +679,25 @@ class SpokenTextTransformer:
                 clean = clean + "."
 
         prosody_obj.speech_text = clean
+
+        # Section 9: Pronunciation Debugging Logger (Developer logs only, never sent to Telegram)
+        if slang_decisions or prosody_obj.pronunciation_overrides:
+            decision_lines = [
+                f"  - [{d.action}] '{d.surface_form}' -> '{d.normalized_spoken_form}' ({d.reason})"
+                for d in slang_decisions
+            ] + [f"  - [override] {ov}" for ov in prosody_obj.pronunciation_overrides]
+            logger.debug(
+                "\n[TTS_PRONUNCIATION_DEBUG]\n"
+                "ORIGINAL:\n%s\n"
+                "NORMALIZED:\n%s\n"
+                "PRONUNCIATION:\n%s\n"
+                "TTS INPUT:\n%s",
+                text,
+                clean,
+                "\n".join(decision_lines),
+                clean,
+            )
+
         return prosody_obj
 
 

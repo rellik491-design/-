@@ -63,15 +63,9 @@ class MediaService:
             res_fb = await session.execute(stmt_fallback)
             asset = res_fb.scalars().first()
 
-        # 3. If everything was already sent, pick least frequently sent
+        # 3. If everything was already sent for this contact -> STRICT NO-REPEAT: return None
         if not asset:
-            stmt_any = (
-                select(MediaAsset)
-                .where(MediaAsset.user_id == user_id)
-                .order_by(MediaAsset.times_sent.asc())
-            )
-            res_any = await session.execute(stmt_any)
-            asset = res_any.scalars().first()
+            return None
 
         if asset:
             # Record sent history

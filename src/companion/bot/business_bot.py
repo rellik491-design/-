@@ -1,4 +1,6 @@
 import asyncio
+import os
+import json
 import time
 import random
 import logging
@@ -16,6 +18,7 @@ from companion.services.subscription_service import SubscriptionService
 from companion.services.handover_service import HandoverService
 from companion.services.voice_service import VoiceService
 from companion.services.stt_service import STTService
+from companion.services.intent_service import IntentService
 from companion.bot.userbot_handler import UserbotHandler
 from companion.bot.admin_notifier import AdminNotifier
 from companion.bot.response_planner import AsyncMessageBatcher, ResponsePlanner
@@ -263,6 +266,20 @@ class BusinessChatBot:
         message_id = message_data.get("message_id")
         reply_to_msg = message_data.get("reply_to_message") or {}
         reply_to_msg_id = reply_to_msg.get("message_id") if isinstance(reply_to_msg, dict) else None
+
+        # Section 10 & 11: Message Ownership & Hard Self-Response Block
+        from companion.services.message_ownership_service import MessageOwnershipService
+        sender_type = MessageOwnershipService.classify_message(
+            author_id=sender_id,
+            author_username=sender.get("username"),
+            telegram_message_id=message_id,
+            chat_id=chat_id,
+        )
+        if sender_type == "BOT":
+            logger.info("[BUSINESS_BOT] Hard Self-Response Block: sender %s is BOT. Ignoring inbound message.", sender_id)
+            if message_id:
+                MessageOwnershipService.register_outgoing_message_memory(chat_id, message_id)
+            return {"action": "ignored", "reason": "bot_self_message"}
         lock = cls._get_chat_lock(str(connection_id), int(chat_id))
 
         # Idempotency check under short lock before reading cycle
@@ -486,23 +503,29 @@ class BusinessChatBot:
             except Exception as e_tel:
                 logger.debug("TelethonService mark contents skipped: %s", e_tel)
 
-        res = await UserbotHandler.process_incoming_message(
-            session=session,
-            user_id=account.user_id,
-            sender_tg_id=sender_id,
-            sender_username=sender.get("username"),
-            sender_first_name=sender.get("first_name"),
-            text=text,
-            now=now,
-            auto_handover_on_date=auto_handover_on_date,
-            account_id=account.id,
-            is_voice=is_voice,
-            voice_duration=voice_duration,
-            voice_file_id=file_id,
-            telegram_message_id=message_id,
-            incoming_batch=incoming_batch,
-            bot_token=token,
-        )
+        try:
+            res = await UserbotHandler.process_incoming_message(
+                session=session,
+                user_id=account.user_id,
+                sender_tg_id=sender_id,
+                sender_username=sender.get("username"),
+                sender_first_name=sender.get("first_name"),
+                text=text,
+                now=now,
+                auto_handover_on_date=auto_handover_on_date,
+                account_id=account.id,
+                is_voice=is_voice,
+                voice_duration=voice_duration,
+                voice_file_id=file_id,
+                telegram_message_id=message_id,
+                incoming_batch=incoming_batch,
+                bot_token=token,
+            )
+        except Exception as proc_err:
+            logger.exception("[BUSINESS_BOT] Error in process_incoming_message: %s", proc_err)
+            from companion.services.health_manager import HealthManager
+            HealthManager.report_provider_error(proc_err, context="business_bot_process_incoming")
+            return {"action": "paused_due_to_error", "reason": str(proc_err)}
 
         # Subscription owner lookup
         owner_user_stmt = select(User).where(User.id == account.user_id)
@@ -514,7 +537,7 @@ class BusinessChatBot:
         contact_id = contact.id if contact else chat_id
 
         action = res.get("action")
-        if action in ("ignored", "sleeping_overnight"):
+        if action in ("ignored", "sleeping_overnight", "silence", "paused_due_to_health", "paused_due_to_error") or not res.get("reply_text"):
             return res
 
         unread_batch_res = res.get("unread_batch") or []
@@ -525,11 +548,15 @@ class BusinessChatBot:
         alert_user_message = f"🎙 [ГС {voice_duration} сек]: «{combined_transcribed}»" if is_voice else combined_transcribed
 
         detected_event = res.get("detected_event")
-        if detected_event == "DATE_PROPOSED":
-            if contact and not getattr(contact, "alert_date_sent", False):
-                contact.alert_date_sent = True
+        meetup_intent = IntentService.detect_meetup_proposal(alert_user_message)
+        meetup_agreed = IntentService.detect_meetup_agreement(alert_user_message)
+
+        if detected_event == "QUEST_AGREED" or (meetup_agreed and getattr(contact, "funnel_stage", "") in ("date_proposed", "quest_offered", "quest_agreed")):
+            if contact and not getattr(contact, "alert_quest_sent", False):
+                contact.alert_quest_sent = True
+                contact.funnel_stage = "quest_agreed"
                 await session.commit()
-                await AdminNotifier.send_date_proposed_alert(
+                await AdminNotifier.send_quest_agreed_alarm(
                     owner_tg_id=owner_tg_id,
                     contact_name=contact_name,
                     contact_username=contact_username,
@@ -537,11 +564,12 @@ class BusinessChatBot:
                     user_message=alert_user_message,
                     contact_id=contact_id,
                 )
-        elif detected_event == "QUEST_AGREED":
-            if contact and not getattr(contact, "alert_quest_sent", False):
-                contact.alert_quest_sent = True
+        elif detected_event == "DATE_PROPOSED" or meetup_intent.is_proposal or meetup_agreed:
+            if contact and not getattr(contact, "alert_date_sent", False):
+                contact.alert_date_sent = True
+                contact.funnel_stage = "date_proposed"
                 await session.commit()
-                await AdminNotifier.send_quest_agreed_alarm(
+                await AdminNotifier.send_date_proposed_alert(
                     owner_tg_id=owner_tg_id,
                     contact_name=contact_name,
                     contact_username=contact_username,
@@ -596,6 +624,37 @@ class BusinessChatBot:
                     await cls.read_business_message(token, connection_id, chat_id, message_id)
 
                 # 2. Fast, responsive delivery of the planned batch response (no 15–45s unread stall after AI!)
+                # Photo Pool Delivery (Reserve-Before-Send lifecycle tracking)
+                photo_obj = res.get("photo_pool_asset") or res.get("photo_asset")
+                if photo_obj:
+                    p_path = getattr(photo_obj, "storage_path", None) or getattr(photo_obj, "file_path", None) or getattr(photo_obj, "telegram_file_id", None)
+                    p_id = getattr(photo_obj, "photo_id", None) or str(getattr(photo_obj, "id", ""))
+                    if p_path:
+                        await cls.send_business_chat_action(token, connection_id, chat_id, "upload_photo")
+                        if not is_mock:
+                            await asyncio.sleep(random.uniform(1.0, 2.0))
+                        sent_photo_msg_id = await cls.send_business_photo(
+                            bot_token=token,
+                            business_connection_id=connection_id,
+                            chat_id=chat_id,
+                            photo_path_or_id=p_path,
+                        )
+                        from companion.services.photo_pool_service import PhotoPoolService
+                        if sent_photo_msg_id:
+                            await PhotoPoolService.mark_photo_sent(
+                                session=session,
+                                chat_id=str(chat_id),
+                                photo_id=p_id,
+                                message_id=sent_photo_msg_id,
+                            )
+                        else:
+                            await PhotoPoolService.mark_photo_failed(
+                                session=session,
+                                chat_id=str(chat_id),
+                                photo_id=p_id,
+                                release_reservation=False,
+                            )
+
                 if voice_tag:
                     await cls.send_business_chat_action(token, connection_id, chat_id, "record_voice")
                     await VoiceService.send_telegram_voice_note(
@@ -614,8 +673,11 @@ class BusinessChatBot:
                         business_connection_id=connection_id,
                     )
                     if not sent:
+                        from companion.services.output_sanitizer import OutputSanitizer
                         for idx, msg_item in enumerate(planned_messages):
-                            bubble = msg_item["text"]
+                            bubble = OutputSanitizer.sanitize_outgoing_text(msg_item.get("text", ""))
+                            if not bubble:
+                                continue
                             reply_to_id = msg_item.get("reply_to_message_id")
                             if idx > 0 and not is_mock:
                                 await asyncio.sleep(random.uniform(delay_range[0], delay_range[1]))
@@ -628,8 +690,11 @@ class BusinessChatBot:
                                 token, connection_id, chat_id, bubble, reply_to_message_id=reply_to_id
                             )
                 else:
+                    from companion.services.output_sanitizer import OutputSanitizer
                     for idx, msg_item in enumerate(planned_messages):
-                        bubble = msg_item["text"]
+                        bubble = OutputSanitizer.sanitize_outgoing_text(msg_item.get("text", ""))
+                        if not bubble:
+                            continue
                         reply_to_id = msg_item.get("reply_to_message_id")
                         if idx > 0 and not is_mock:
                             await asyncio.sleep(random.uniform(delay_range[0], delay_range[1]))
@@ -700,6 +765,18 @@ class BusinessChatBot:
         reply_to_message_id: Optional[int] = None,
     ) -> bool:
         """Sends message on behalf of the user's account using business_connection_id and native Telegram Reply."""
+        from companion.services.output_sanitizer import OutputSanitizer
+        clean_text = OutputSanitizer.sanitize_outgoing_text(text)
+        is_valid_out, invalid_reason = OutputSanitizer.validate_final_outgoing(clean_text)
+        if not is_valid_out:
+            logger.warning(
+                "[OUTPUT_SANITIZER] Blocked invalid outgoing business message in chat %s (reason=%s): %r",
+                chat_id,
+                invalid_reason,
+                str(text)[:120],
+            )
+            return False
+
         if not bot_token or bot_token in ("mock_token", "test_token"):
             return True
         from companion.bot.reply_validator import ReplyValidator
@@ -707,7 +784,7 @@ class BusinessChatBot:
         payload: Dict[str, Any] = {
             "business_connection_id": business_connection_id,
             "chat_id": chat_id,
-            "text": text,
+            "text": clean_text,
         }
         if reply_to_message_id is not None:
             reply_params = ReplyValidator.build_reply_parameters(reply_to_message_id, is_business_connection=True)
@@ -719,6 +796,14 @@ class BusinessChatBot:
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     res = await client.post(url, json=payload)
                     if res.status_code == 200:
+                        try:
+                            resp_json = res.json()
+                            sent_id = resp_json.get("result", {}).get("message_id")
+                            if sent_id:
+                                from companion.services.message_ownership_service import MessageOwnershipService
+                                MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                        except Exception:
+                            pass
                         return True
                     # If Telegram returns 400 Bad Request due to reply target, gracefully fallback to sending without reply
                     if res.status_code == 400 and "reply_parameters" in payload:
@@ -727,7 +812,17 @@ class BusinessChatBot:
                         payload.pop("reply_to_message_id", None)
                         payload.pop("allow_sending_without_reply", None)
                         retry_res = await client.post(url, json=payload)
-                        return retry_res.status_code == 200
+                        if retry_res.status_code == 200:
+                            try:
+                                resp_json = retry_res.json()
+                                sent_id = resp_json.get("result", {}).get("message_id")
+                                if sent_id:
+                                    from companion.services.message_ownership_service import MessageOwnershipService
+                                    MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                            except Exception:
+                                pass
+                            return True
+                        return False
 
                     logger.error("Failed to send business message in chat %s: HTTP %s - %s", chat_id, res.status_code, res.text)
                     return False
@@ -765,16 +860,116 @@ class BusinessChatBot:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 res = await client.post(url, json=payload)
                 if res.status_code == 200:
+                    try:
+                        resp_json = res.json()
+                        sent_id = resp_json.get("result", {}).get("message_id")
+                        if sent_id:
+                            from companion.services.message_ownership_service import MessageOwnershipService
+                            MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                    except Exception:
+                        pass
                     return True
                 if res.status_code == 400 and "reply_parameters" in payload:
                     payload.pop("reply_parameters", None)
                     payload.pop("reply_to_message_id", None)
                     payload.pop("allow_sending_without_reply", None)
                     retry_res = await client.post(url, json=payload)
-                    return retry_res.status_code == 200
+                    if retry_res.status_code == 200:
+                        try:
+                            resp_json = retry_res.json()
+                            sent_id = resp_json.get("result", {}).get("message_id")
+                            if sent_id:
+                                from companion.services.message_ownership_service import MessageOwnershipService
+                                MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                        except Exception:
+                            pass
+                        return True
+                    return False
                 return False
         except Exception:
             return False
+
+    @classmethod
+    async def send_business_photo(
+        cls,
+        bot_token: str,
+        business_connection_id: str,
+        chat_id: int,
+        photo_path_or_id: str,
+        caption: Optional[str] = None,
+        reply_to_message_id: Optional[int] = None,
+    ) -> Optional[int]:
+        """
+        Sends a photo on behalf of the user's business connection.
+        Supports both telegram_file_id and local file upload (multipart).
+        Returns Telegram message_id on success, or None on failure.
+        """
+        if not bot_token or bot_token in ("mock_token", "test_token"):
+            return 999999
+
+        url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+        data: Dict[str, Any] = {
+            "business_connection_id": business_connection_id,
+            "chat_id": str(chat_id),
+        }
+        if caption:
+            from companion.services.output_sanitizer import OutputSanitizer
+            clean_caption = OutputSanitizer.sanitize_outgoing_text(caption)
+            if clean_caption:
+                data["caption"] = clean_caption
+
+        from companion.bot.reply_validator import ReplyValidator
+        if reply_to_message_id is not None:
+            reply_params = ReplyValidator.build_reply_parameters(reply_to_message_id, is_business_connection=True)
+            if reply_params:
+                data["reply_parameters"] = json.dumps(reply_params)
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                if os.path.exists(photo_path_or_id):
+                    with open(photo_path_or_id, "rb") as f:
+                        fname = os.path.basename(photo_path_or_id)
+                        files = {"photo": (fname, f, "image/jpeg")}
+                        res = await client.post(url, data=data, files=files)
+                else:
+                    data["photo"] = photo_path_or_id
+                    res = await client.post(url, data=data)
+
+                if res.status_code == 200:
+                    resp_json = res.json()
+                    sent_id = resp_json.get("result", {}).get("message_id") or 1
+                    try:
+                        from companion.services.message_ownership_service import MessageOwnershipService
+                        MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                    except Exception:
+                        pass
+                    return sent_id
+
+                # If failed with reply parameters, retry without reply
+                if res.status_code == 400 and "reply_parameters" in data:
+                    data.pop("reply_parameters", None)
+                    if os.path.exists(photo_path_or_id):
+                        with open(photo_path_or_id, "rb") as f:
+                            fname = os.path.basename(photo_path_or_id)
+                            files = {"photo": (fname, f, "image/jpeg")}
+                            res_retry = await client.post(url, data=data, files=files)
+                    else:
+                        res_retry = await client.post(url, data=data)
+                    if res_retry.status_code == 200:
+                        resp_json = res_retry.json()
+                        sent_id = resp_json.get("result", {}).get("message_id") or 1
+                        try:
+                            from companion.services.message_ownership_service import MessageOwnershipService
+                            MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                        except Exception:
+                            pass
+                        return sent_id
+
+                logger.error("Failed to send business photo in chat %s: HTTP %s - %s", chat_id, res.status_code, res.text)
+                return None
+        except Exception as e:
+            logger.error("Exception in send_business_photo in chat %s: %r", chat_id, e)
+            return None
 
     @staticmethod
     async def send_business_chat_action(

@@ -38,6 +38,7 @@ from companion.services.crypto_pay_service import CryptoPayService
 from companion.services.reengagement_service import ReengagementService
 from companion.services.ai_service import AIService
 from companion.services.timezone_service import TimezoneService
+from companion.services.intent_service import IntentService
 from companion.bot.userbot_handler import UserbotHandler
 from companion.bot.business_bot import BusinessChatBot
 from companion.bot.admin_notifier import AdminNotifier
@@ -77,6 +78,12 @@ class TelegramBotEngine:
         self._user_input_states: Dict[int, str] = {}
         self._cached_voice_files: Dict[str, str] = {}
         self.manager = ConversationManagerEngine()
+
+    def is_admin_user(self, user_tg_id: Optional[int]) -> bool:
+        if not user_tg_id:
+            return False
+        admin_ids = {self.admin_id, getattr(settings, "ADMIN_TELEGRAM_ID", 0), 8541203642, 8501711204} - {0, None}
+        return user_tg_id in admin_ids
 
     async def start(self):
         self._running = True
@@ -146,7 +153,7 @@ class TelegramBotEngine:
                                 f"⏳ Срок действия продлен до: <b>{sub.expires_at.strftime('%d.%m.%Y %H:%M')}</b>\n\n"
                                 f"Все функции бота и автоматизация чатов активны!"
                             ),
-                            reply_markup=self.build_main_menu_keyboard(is_admin=(u.telegram_id == self.admin_id)),
+                            reply_markup=self.build_main_menu_keyboard(is_admin=self.is_admin_user(u.telegram_id)),
                             parse_mode="HTML",
                         )
                     # Alert admin
@@ -343,6 +350,14 @@ class TelegramBotEngine:
                 return False
             res = await self.client.post(url, json=payload)
             if res.status_code == 200:
+                try:
+                    resp_json = res.json()
+                    sent_id = resp_json.get("result", {}).get("message_id")
+                    if sent_id:
+                        from companion.services.message_ownership_service import MessageOwnershipService
+                        MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                except Exception:
+                    pass
                 return True
             if res.status_code == 400 and "reply_parameters" in payload:
                 logger.warning("Telegram rejected reply_parameters for direct chat %s (%s). Retrying without reply target.", chat_id, res.text)
@@ -350,13 +365,76 @@ class TelegramBotEngine:
                 payload.pop("reply_to_message_id", None)
                 payload.pop("allow_sending_without_reply", None)
                 retry_res = await self.client.post(url, json=payload)
-                return retry_res.status_code == 200
+                if retry_res.status_code == 200:
+                    try:
+                        resp_json = retry_res.json()
+                        sent_id = resp_json.get("result", {}).get("message_id")
+                        if sent_id:
+                            from companion.services.message_ownership_service import MessageOwnershipService
+                            MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                    except Exception:
+                        pass
+                    return True
+                return False
             if res.status_code != 200:
                 logger.error("Failed to send message: %s - %s", res.status_code, res.text)
             return res.status_code == 200
         except Exception as e:
             logger.error("Exception in send_message: %s (%s)", type(e).__name__, e)
             return False
+
+    async def send_photo(
+        self,
+        chat_id: int,
+        photo_path_or_id: str,
+        caption: Optional[str] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        parse_mode: str = "HTML",
+        reply_to_message_id: Optional[int] = None,
+    ) -> Optional[int]:
+        """
+        Sends a photo to chat_id. Supports local storage file path or telegram_file_id.
+        Returns Telegram message_id on success, or None on failure.
+        """
+        url = f"{self.base_url}/sendPhoto"
+        data: Dict[str, Any] = {
+            "chat_id": str(chat_id),
+            "parse_mode": parse_mode,
+        }
+        if caption:
+            data["caption"] = caption
+        if reply_markup:
+            data["reply_markup"] = json.dumps(reply_markup) if isinstance(reply_markup, dict) else reply_markup
+        if reply_to_message_id is not None:
+            data["reply_to_message_id"] = str(reply_to_message_id)
+
+        try:
+            if not self.client:
+                return None
+            import os
+            if os.path.exists(photo_path_or_id):
+                with open(photo_path_or_id, "rb") as f:
+                    files = {"photo": (os.path.basename(photo_path_or_id), f, "image/jpeg")}
+                    res = await self.client.post(url, data=data, files=files)
+            else:
+                data["photo"] = photo_path_or_id
+                res = await self.client.post(url, data=data)
+
+            if res.status_code == 200:
+                resp_json = res.json()
+                sent_id = resp_json.get("result", {}).get("message_id") or 1
+                try:
+                    from companion.services.message_ownership_service import MessageOwnershipService
+                    MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                except Exception:
+                    pass
+                return sent_id
+            else:
+                logger.error("Failed to send photo: %s - %s", res.status_code, res.text)
+                return None
+        except Exception as e:
+            logger.error("Exception in send_photo: %s (%s)", type(e).__name__, e)
+            return None
 
     async def send_sticker(
         self,
@@ -381,6 +459,14 @@ class TelegramBotEngine:
         try:
             res = await self.client.post(url, json=payload)
             if res.status_code == 200:
+                try:
+                    resp_json = res.json()
+                    sent_id = resp_json.get("result", {}).get("message_id")
+                    if sent_id:
+                        from companion.services.message_ownership_service import MessageOwnershipService
+                        MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
+                except Exception:
+                    pass
                 return True
             if res.status_code == 400 and "reply_parameters" in payload:
                 payload.pop("reply_parameters", None)
@@ -633,6 +719,9 @@ class TelegramBotEngine:
                 {"text": "👥 Подписчики и Аккаунты", "callback_data": "admin_users_overview"},
                 {"text": "🎁 Выдать / Подарить подписку", "callback_data": "admin_grant_menu"},
             ])
+            buttons.append([
+                {"text": "📸 Photo Pool (Пул фото)", "callback_data": "photos_stats"},
+            ])
 
         return {"inline_keyboard": buttons}
 
@@ -752,7 +841,7 @@ class TelegramBotEngine:
         for idx, u in enumerate(users_data, 1):
             sub_info = u["sub_info"]
             user_title = f"@{u['username']}" if u["username"] else f"ID {u['telegram_id']}"
-            is_adm = (u["telegram_id"] == self.admin_id)
+            is_adm = self.is_admin_user(u["telegram_id"])
             adm_badge = " 👑 (Админ)" if is_adm else ""
 
             if sub_info["is_active"]:
@@ -820,7 +909,7 @@ class TelegramBotEngine:
     def format_single_user_detail_text(self, u: Dict[str, Any]) -> str:
         sub_info = u["sub_info"]
         user_title = f"@{u['username']}" if u["username"] else f"ID {u['telegram_id']}"
-        is_adm = (u["telegram_id"] == self.admin_id)
+        is_adm = self.is_admin_user(u["telegram_id"])
         adm_badge = " 👑 (Администратор)" if is_adm else ""
 
         if sub_info["is_active"]:
@@ -1411,12 +1500,99 @@ class TelegramBotEngine:
         except Exception as e:
             logger.exception("Error processing update %s: %s", update.get("update_id"), e)
 
+    async def _handle_admin_photo_upload(
+        self, message: Dict[str, Any], user_id: int, chat_id: int, caption: str
+    ):
+        """Processes photo upload into persistent photo pool by bot admin."""
+        photos = message.get("photo", [])
+        if not photos:
+            await self.send_message(chat_id, "⚠️ Фотография не обнаружена в сообщении.")
+            return
+
+        best_photo = photos[-1]
+        file_id = best_photo.get("file_id")
+        file_bytes = await self.download_file_bytes(file_id)
+        if not file_bytes:
+            await self.send_message(chat_id, "❌ Не удалось скачать файл фотографии из Telegram.")
+            return
+
+        clean_cap = caption
+        for prefix in ["#photo", "/addphoto", "/photo"]:
+            if clean_cap.startswith(prefix):
+                clean_cap = clean_cap[len(prefix):].strip()
+
+        parts = clean_cap.split(maxsplit=2)
+        category = "casual"
+        tags = []
+        description = ""
+
+        from companion.services.photo_pool_service import PhotoPoolService
+        if len(parts) >= 1 and parts[0]:
+            cand_cat = parts[0].lstrip("#").lower()
+            if cand_cat in PhotoPoolService.CATEGORIES or len(parts) > 1:
+                category = cand_cat
+                if len(parts) >= 2:
+                    raw_tags = parts[1].split(",")
+                    tags = [t.strip().lstrip("#").lower() for t in raw_tags if t.strip()]
+                if len(parts) >= 3:
+                    description = parts[2].strip()
+            else:
+                description = clean_cap
+        elif clean_cap:
+            description = clean_cap
+
+        async with async_session_maker() as session:
+            db_user = await self.get_or_create_user(session, message.get("from", {}))
+            try:
+                photo, is_new = await PhotoPoolService.add_photo(
+                    session=session,
+                    file_bytes=file_bytes,
+                    filename=f"{best_photo.get('file_unique_id', 'photo')}.jpg",
+                    category=category,
+                    tags=tags,
+                    description=description,
+                    user_id=db_user.id,
+                    telegram_file_id=file_id,
+                )
+            except Exception as e:
+                await self.send_message(chat_id, f"❌ Ошибка добавления фото: {e}")
+                return
+
+            if is_new:
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "📋 Все фото пула", "callback_data": "photos_list_0"}],
+                        [{"text": "◀️ В меню", "callback_data": "menu_main"}],
+                    ]
+                }
+                msg = (
+                    "✅ <b>Фото успешно добавлено в Photo Pool!</b>\n\n"
+                    f"🆔 <b>ID:</b> <code>{photo.photo_id}</code>\n"
+                    f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
+                    f"🏷 <b>Теги:</b> {', '.join(photo.get_tags()) or '—'}\n"
+                    f"📝 <b>Описание:</b> {photo.description or '—'}\n"
+                    f"💾 <b>Размер:</b> {photo.file_size // 1024} КБ\n"
+                    f"📊 <b>dHash:</b> <code>{photo.perceptual_hash or '—'}</code>\n"
+                    f"🔒 <b>SHA-256:</b> <code>{photo.file_hash[:16]}...</code>\n\n"
+                    "<i>Фото готово к контекстной отправке и защищено правилом No-Repeat.</i>"
+                )
+                await self.send_message(chat_id, msg, reply_markup=kb, parse_mode="HTML")
+            else:
+                msg = (
+                    "⚠️ <b>Дубликат обнаружен!</b>\n\n"
+                    f"Это фото уже есть в пуле (совпадение по хэшу).\n"
+                    f"🆔 <b>Существующий ID:</b> <code>{photo.photo_id}</code>\n"
+                    f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
+                    f"🕒 <b>Загружено:</b> {photo.created_at.strftime('%Y-%m-%d %H:%M') if photo.created_at else '—'}"
+                )
+                await self.send_message(chat_id, msg, parse_mode="HTML")
+
     async def handle_message(self, message: Dict[str, Any]):
         user_tg = message.get("from", {})
         user_id = user_tg.get("id")
         text = message.get("text", "").strip()
         chat_id = message.get("chat", {}).get("id")
-        is_admin = (user_id == self.admin_id)
+        is_admin = self.is_admin_user(user_id)
 
         # 0. Intercept incoming voice note, audio or video note message (Speech-to-Text)
         if "voice" in message or "audio" in message or "video_note" in message:
@@ -1503,6 +1679,17 @@ class TelegramBotEngine:
                         parse_mode="HTML",
                     )
                     return
+
+        # Admin Photo Pool Upload Interceptor
+        caption = (message.get("caption") or "").strip()
+        if is_admin and "photo" in message and (
+            caption.startswith("#photo")
+            or caption.startswith("/addphoto")
+            or caption.startswith("/photo")
+            or self._user_input_states.get(user_id) == "photo_upload"
+        ):
+            await self._handle_admin_photo_upload(message, user_id, chat_id, caption)
+            return
 
         # Multimodal Vision: process stickers, GIFs (animations), photos and reply contexts
         if not text or "photo" in message or "sticker" in message or "animation" in message or "reply_to_message" in message:
@@ -2421,6 +2608,98 @@ class TelegramBotEngine:
                 await self.send_message(chat_id, report, reply_markup=kb, parse_mode="HTML")
                 return
 
+            if text in ("/photos", "/photo_pool", "/photopool") or text.startswith("/photos"):
+                from companion.services.photo_pool_service import PhotoPoolService
+                stats = await PhotoPoolService.get_pool_stats(session)
+                cats_str = "\n".join([f"  • {c}: {cnt}" for c, cnt in stats["categories"].items()]) or "  • <i>(пусто)</i>"
+                report = (
+                    "📸 <b>PERSISTENT PHOTO POOL — СТАТИСТИКА</b>\n\n"
+                    f"🖼 Всего фото: <b>{stats['total_photos']}</b>\n"
+                    f"🟢 Активных: <b>{stats['enabled_photos']}</b>\n"
+                    f"⚪ Отключенных: <b>{stats['disabled_photos']}</b>\n"
+                    f"📤 Отправок всего: <b>{stats['total_sent_events']}</b>\n"
+                    f"👥 Уникальных чатов: <b>{stats['distinct_chats_reached']}</b>\n\n"
+                    f"<b>Категории в пуле:</b>\n{cats_str}\n\n"
+                    f"⚙️ <b>Лимиты редкости:</b>\n"
+                    f"• Cooldown: {getattr(settings, 'PHOTO_COOLDOWN_HOURS', 12)}ч\n"
+                    f"• Макс. спонтанных/день: {getattr(settings, 'MAX_SPONTANEOUS_PHOTOS_PER_DAY', 1)}\n"
+                    f"• Макс. спонтанных/неделя: {getattr(settings, 'MAX_SPONTANEOUS_PHOTOS_PER_WEEK', 4)}\n\n"
+                    "🔒 <b>Правило No-Repeat:</b> Активно (фото отправляется в чат максимум 1 раз за все время)."
+                )
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "📋 Список фото", "callback_data": "photos_list_0"}],
+                        [{"text": "➕ Как загрузить фото", "callback_data": "photos_upload_help"}],
+                        [{"text": "🔄 Обновить", "callback_data": "photos_refresh"}],
+                        [{"text": "◀️ В главное меню", "callback_data": "menu_main"}],
+                    ]
+                }
+                await self.send_message(chat_id, report, reply_markup=kb, parse_mode="HTML")
+                return
+
+            if text.startswith("/photo_toggle"):
+                parts = text.split()
+                if len(parts) < 2:
+                    await self.send_message(chat_id, "Использование: <code>/photo_toggle &lt;photo_id&gt;</code>", parse_mode="HTML")
+                    return
+                pid = parts[1].strip()
+                from companion.services.photo_pool_service import PhotoPoolService
+                curr = await PhotoPoolService.get_photo(session, pid)
+                if not curr:
+                    await self.send_message(chat_id, f"❌ Фото с ID <code>{pid}</code> не найдено.", parse_mode="HTML")
+                    return
+                new_state = not curr.enabled
+                await PhotoPoolService.toggle_photo_status(session, pid, new_state)
+                st_label = "🟢 Включено" if new_state else "⚪ Отключено"
+                await self.send_message(chat_id, f"✅ Фото <code>{pid}</code> теперь: {st_label}", parse_mode="HTML")
+                return
+
+            if text.startswith("/photo_del"):
+                parts = text.split()
+                if len(parts) < 2:
+                    await self.send_message(chat_id, "Использование: <code>/photo_del &lt;photo_id&gt;</code>", parse_mode="HTML")
+                    return
+                pid = parts[1].strip()
+                from companion.services.photo_pool_service import PhotoPoolService
+                ok = await PhotoPoolService.delete_photo(session, pid, delete_file=True)
+                if ok:
+                    await self.send_message(chat_id, f"🗑 Фото <code>{pid}</code> удалено из пула.", parse_mode="HTML")
+                else:
+                    await self.send_message(chat_id, f"❌ Фото с ID <code>{pid}</code> не найдено.", parse_mode="HTML")
+                return
+
+            if text.startswith("/photo_info"):
+                parts = text.split()
+                if len(parts) < 2:
+                    await self.send_message(chat_id, "Использование: <code>/photo_info &lt;photo_id&gt;</code>", parse_mode="HTML")
+                    return
+                pid = parts[1].strip()
+                from companion.services.photo_pool_service import PhotoPoolService
+                ph = await PhotoPoolService.get_photo(session, pid)
+                if not ph:
+                    await self.send_message(chat_id, f"❌ Фото с ID <code>{pid}</code> не найдено.", parse_mode="HTML")
+                    return
+                from companion.models.entities import ChatPhotoUsage
+                u_res = await session.execute(
+                    select(ChatPhotoUsage).where(ChatPhotoUsage.photo_id == pid)
+                )
+                usages = u_res.scalars().all()
+                chats_list = ", ".join([f"{u.chat_id} ({u.status})" for u in usages]) or "еще ни разу не отправлялось"
+                msg = (
+                    f"📷 <b>ИНФОРМАЦИЯ О ФОТО:</b> <code>{ph.photo_id}</code>\n\n"
+                    f"📁 <b>Категория:</b> <code>{ph.category}</code>\n"
+                    f"🏷 <b>Теги:</b> {', '.join(ph.get_tags()) or '—'}\n"
+                    f"📝 <b>Описание:</b> {ph.description or '—'}\n"
+                    f"🟢 <b>Статус:</b> {'Активно' if ph.enabled else 'Отключено'}\n"
+                    f"📤 <b>Отправок:</b> {ph.times_used}\n"
+                    f"💾 <b>Размер:</b> {ph.file_size // 1024} КБ\n"
+                    f"📊 <b>dHash:</b> <code>{ph.perceptual_hash}</code>\n"
+                    f"🔒 <b>SHA-256:</b> <code>{ph.file_hash[:16]}...</code>\n\n"
+                    f"👥 <b>Использовано в чатах:</b>\n{chats_list}"
+                )
+                await self.send_message(chat_id, msg, parse_mode="HTML")
+                return
+
             if text == "/help":
                 help_text = (
                     "❓ <b>СПРАВКА И СПИСОК КОМАНД БОТА</b>\n\n"
@@ -2725,26 +3004,36 @@ class TelegramBotEngine:
                 return
 
             # 5. Direct companion conversational mode in @YourHelperW_bot
+            from companion.services.health_manager import HealthManager
+            if HealthManager.is_paused():
+                logger.warning("[TELEGRAM_ENGINE] System is in SAFE PAUSED state (%s). Suppressing reply to %s", HealthManager.get_paused_reason(), user_id)
+                return
+
             v_data = message.get("voice") or message.get("audio") or message.get("video_note")
             v_file_id = v_data.get("file_id") if v_data else None
             is_incoming_voice = bool(v_data)
             voice_duration = v_data.get("duration", 0) if v_data else 0
             msg_id = message.get("message_id")
 
-            res = await UserbotHandler.process_incoming_message(
-                session=session,
-                user_id=db_user.id,
-                sender_tg_id=user_id,
-                sender_username=user_tg.get("username"),
-                sender_first_name=user_tg.get("first_name"),
-                text=text,
-                now=datetime.now(timezone.utc),
-                auto_handover_on_date=True,
-                is_voice=is_incoming_voice,
-                voice_duration=voice_duration,
-                voice_file_id=v_file_id,
-                telegram_message_id=msg_id,
-            )
+            try:
+                res = await UserbotHandler.process_incoming_message(
+                    session=session,
+                    user_id=db_user.id,
+                    sender_tg_id=user_id,
+                    sender_username=user_tg.get("username"),
+                    sender_first_name=user_tg.get("first_name"),
+                    text=text,
+                    now=datetime.now(timezone.utc),
+                    auto_handover_on_date=True,
+                    is_voice=is_incoming_voice,
+                    voice_duration=voice_duration,
+                    voice_file_id=v_file_id,
+                    telegram_message_id=msg_id,
+                )
+            except Exception as e:
+                logger.exception("Error processing message in TelegramBotEngine: %s", e)
+                HealthManager.report_provider_error(e, context="telegram_engine_handle_message")
+                return
             action = res.get("action")
             reply_text = res.get("reply_text")
             voice_tag = res.get("voice_tag")
@@ -2756,11 +3045,44 @@ class TelegramBotEngine:
             ]
             planned_sticker = response_plan.get("sticker")
 
+            contact = res.get("contact")
+            c_name = (contact.first_name if contact else None) or user_tg.get("first_name") or "Собеседник"
+            c_user = (contact.username if contact else None) or user_tg.get("username")
+            c_id = contact.id if contact else user_id
+            alert_msg = f"🎙 [ГС {voice_duration} сек]: «{text}»" if is_incoming_voice else text
+
+            detected_event = res.get("detected_event")
+            meetup_intent = IntentService.detect_meetup_proposal(text)
+            meetup_agreed = IntentService.detect_meetup_agreement(text)
+
+            if detected_event == "QUEST_AGREED" or (meetup_agreed and getattr(contact, "funnel_stage", "") in ("date_proposed", "quest_offered", "quest_agreed")):
+                if contact and not getattr(contact, "alert_quest_sent", False):
+                    contact.alert_quest_sent = True
+                    contact.funnel_stage = "quest_agreed"
+                    await session.commit()
+                    await AdminNotifier.send_quest_agreed_alarm(
+                        owner_tg_id=self.admin_id,
+                        contact_name=c_name,
+                        contact_username=c_user,
+                        contact_tg_id=user_id,
+                        user_message=alert_msg,
+                        contact_id=c_id,
+                    )
+            elif detected_event == "DATE_PROPOSED" or meetup_intent.is_proposal or meetup_agreed:
+                if contact and not getattr(contact, "alert_date_sent", False):
+                    contact.alert_date_sent = True
+                    contact.funnel_stage = "date_proposed"
+                    await session.commit()
+                    await AdminNotifier.send_date_proposed_alert(
+                        owner_tg_id=self.admin_id,
+                        contact_name=c_name,
+                        contact_username=c_user,
+                        contact_tg_id=user_id,
+                        user_message=alert_msg,
+                        contact_id=c_id,
+                    )
+
             if res.get("detected_violation"):
-                contact = res.get("contact")
-                c_name = (contact.first_name if contact else None) or user_tg.get("first_name") or "Собеседник"
-                c_user = (contact.username if contact else None) or user_tg.get("username")
-                c_id = contact.id if contact else user_id
                 await AdminNotifier.send_insult_alert(
                     owner_tg_id=self.admin_id,
                     contact_name=c_name,
@@ -2782,6 +3104,9 @@ class TelegramBotEngine:
                     f"🌙 <i>Девушка уже спит (локальное время {time_str}). Бот ответит утром после пробуждения (~09:00)!</i>",
                     parse_mode="HTML",
                 )
+                return
+
+            if action in ("ignored", "silence", "paused_due_to_health", "paused_due_to_error") or not reply_text:
                 return
 
             if reply_text:
@@ -2833,7 +3158,7 @@ class TelegramBotEngine:
         msg_id = message.get("message_id")
         from_user = cq.get("from", {})
         user_tg_id = from_user.get("id")
-        is_admin = (user_tg_id == self.admin_id)
+        is_admin = self.is_admin_user(user_tg_id)
 
         async with async_session_maker() as session:
             db_user = await self.get_or_create_user(session, from_user)
@@ -2854,7 +3179,137 @@ class TelegramBotEngine:
                 )
                 return
 
-            if data == "resume_interrupted_flow":
+            # Photo Pool Callbacks
+            if data in ("photos_stats", "photos_refresh"):
+                from companion.services.photo_pool_service import PhotoPoolService
+                stats = await PhotoPoolService.get_pool_stats(session)
+                cats_str = "\n".join([f"  • {c}: {cnt}" for c, cnt in stats["categories"].items()]) or "  • <i>(пусто)</i>"
+                report = (
+                    "📸 <b>PERSISTENT PHOTO POOL — СТАТИСТИКА</b>\n\n"
+                    f"🖼 Всего фото: <b>{stats['total_photos']}</b>\n"
+                    f"🟢 Активных: <b>{stats['enabled_photos']}</b>\n"
+                    f"⚪ Отключенных: <b>{stats['disabled_photos']}</b>\n"
+                    f"📤 Отправок всего: <b>{stats['total_sent_events']}</b>\n"
+                    f"👥 Уникальных чатов: <b>{stats['distinct_chats_reached']}</b>\n\n"
+                    f"<b>Категории в пуле:</b>\n{cats_str}\n\n"
+                    f"⚙️ <b>Лимиты редкости:</b>\n"
+                    f"• Cooldown: {getattr(settings, 'PHOTO_COOLDOWN_HOURS', 12)}ч\n"
+                    f"• Макс. спонтанных/день: {getattr(settings, 'MAX_SPONTANEOUS_PHOTOS_PER_DAY', 1)}\n"
+                    f"• Макс. спонтанных/неделя: {getattr(settings, 'MAX_SPONTANEOUS_PHOTOS_PER_WEEK', 4)}\n\n"
+                    "🔒 <b>Правило No-Repeat:</b> Активно (фото отправляется в чат максимум 1 раз за все время)."
+                )
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "📋 Список фото", "callback_data": "photos_list_0"}],
+                        [{"text": "➕ Как загрузить фото", "callback_data": "photos_upload_help"}],
+                        [{"text": "🔄 Обновить", "callback_data": "photos_refresh"}],
+                        [{"text": "◀️ В главное меню", "callback_data": "menu_main"}],
+                    ]
+                }
+                await self.answer_callback_query(cq_id)
+                await self.edit_message(chat_id, msg_id, report, reply_markup=kb, parse_mode="HTML")
+                return
+
+            if data.startswith("photos_list_"):
+                page = int(data.split("_")[-1])
+                limit = 5
+                offset = page * limit
+                from companion.services.photo_pool_service import PhotoPoolService
+                photos = await PhotoPoolService.list_photos(session, limit=limit, offset=offset)
+                stats = await PhotoPoolService.get_pool_stats(session)
+                total = stats["total_photos"]
+
+                if not photos:
+                    text_p = "📸 <b>В пуле пока нет загруженных фото.</b>\n\nОтправьте фото в чат с ботом с подписью <code>#photo [категория]</code> для добавления."
+                    kb = {
+                        "inline_keyboard": [
+                            [{"text": "➕ Как загрузить", "callback_data": "photos_upload_help"}],
+                            [{"text": "📊 Статистика пула", "callback_data": "photos_stats"}],
+                            [{"text": "◀️ В меню", "callback_data": "menu_main"}],
+                        ]
+                    }
+                else:
+                    text_p = f"📸 <b>СПИСОК ФОТО В ПУЛЕ</b> (Стр. {page + 1} из {max(1, (total + limit - 1) // limit)}):\n\n"
+                    kb_rows = []
+                    for p in photos:
+                        status_emoji = "🟢" if p.enabled else "⚪"
+                        tags_str = ", ".join(p.get_tags()) or "нет"
+                        text_p += (
+                            f"{status_emoji} <b>{p.photo_id}</b> [{p.category}]\n"
+                            f"   📝 {p.description or 'Без описания'}\n"
+                            f"   🏷 Теги: {tags_str} | Отправок: {p.times_used}\n\n"
+                        )
+                        btn_toggle = f"{'⏸ Выкл' if p.enabled else '▶️ Вкл'} {p.photo_id}"
+                        kb_rows.append([
+                            {"text": btn_toggle, "callback_data": f"photos_tog_{p.photo_id}_{page}"},
+                            {"text": "🗑 Удалить", "callback_data": f"photos_del_{p.photo_id}_{page}"},
+                        ])
+
+                    nav_row = []
+                    if page > 0:
+                        nav_row.append({"text": "⬅️ Назад", "callback_data": f"photos_list_{page - 1}"})
+                    if offset + limit < total:
+                        nav_row.append({"text": "Вперед ➡️", "callback_data": f"photos_list_{page + 1}"})
+                    if nav_row:
+                        kb_rows.append(nav_row)
+
+                    kb_rows.append([{"text": "📊 Статистика пула", "callback_data": "photos_stats"}])
+                    kb_rows.append([{"text": "◀️ В меню", "callback_data": "menu_main"}])
+                    kb = {"inline_keyboard": kb_rows}
+
+                await self.answer_callback_query(cq_id)
+                await self.edit_message(chat_id, msg_id, text_p, reply_markup=kb, parse_mode="HTML")
+                return
+
+            if data.startswith("photos_tog_"):
+                parts = data.split("_")
+                pid = parts[2]
+                page = int(parts[3]) if len(parts) > 3 else 0
+                from companion.services.photo_pool_service import PhotoPoolService
+                curr = await PhotoPoolService.get_photo(session, pid)
+                if curr:
+                    new_st = not curr.enabled
+                    await PhotoPoolService.toggle_photo_status(session, pid, new_st)
+                    await self.answer_callback_query(cq_id, f"Статус {pid}: {'Включено' if new_st else 'Отключено'}")
+                cq["data"] = f"photos_list_{page}"
+                await self.handle_callback(cq)
+                return
+
+            if data.startswith("photos_del_"):
+                parts = data.split("_")
+                pid = parts[2]
+                page = int(parts[3]) if len(parts) > 3 else 0
+                from companion.services.photo_pool_service import PhotoPoolService
+                await PhotoPoolService.delete_photo(session, pid, delete_file=True)
+                await self.answer_callback_query(cq_id, f"Фото {pid} удалено")
+                cq["data"] = f"photos_list_{page}"
+                await self.handle_callback(cq)
+                return
+
+            if data == "photos_upload_help":
+                help_upload = (
+                    "➕ <b>КАК ЗАГРУЗИТЬ ФОТО В PHOTO POOL</b>\n\n"
+                    "Просто отправьте фотографию сюда в чат с ботом с подписью (caption):\n\n"
+                    "<code>#photo [категория] [теги_через_запятую] [описание]</code>\n\n"
+                    "<b>Примеры:</b>\n"
+                    "• <code>#photo selfie morning,casual Утреннее селфи дома</code>\n"
+                    "• <code>#photo coffee cafe,relax В любимой кофейне на Арбате</code>\n"
+                    "• <code>#photo outdoors walk,autumn Прогулка в парке</code>\n\n"
+                    "Доступные категории: <code>selfie, casual, outdoors, home, food, coffee, travel, city, pet, outfit, evening, daytime, weather, hobby, random_life, mood, event</code>\n\n"
+                    "🔒 Бот автоматически вычислит SHA-256 и перцептивный dHash для дедупликации, "
+                    "сохранит фото на диск и свяжет с персоной."
+                )
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "📋 Список фото", "callback_data": "photos_list_0"}],
+                        [{"text": "📊 Статистика пула", "callback_data": "photos_stats"}],
+                        [{"text": "◀️ В меню", "callback_data": "menu_main"}],
+                    ]
+                }
+                await self.answer_callback_query(cq_id)
+                await self.edit_message(chat_id, msg_id, help_upload, reply_markup=kb, parse_mode="HTML")
+                return
+
                 resumed_raw, _ = mgr_state.resume_interrupted()
                 await self.answer_callback_query(cq_id, "▶️ Продолжаем ввод")
                 if resumed_raw:

@@ -179,12 +179,24 @@ class MemoryManager:
 
         extracted_items: List[Tuple[str, str, str, float]] = []
 
-        # 1. City & origin detection
-        city, _ = TimezoneService.detect_city_and_timezone(cleaned)
-        if city:
-            extracted_items.append(("fact", "city", city, 0.95))
-        if contact.origin_city:
-            extracted_items.append(("fact", "origin_city", contact.origin_city, 0.95))
+        # 1. City & origin detection via UserGeographyService (Separating Origin != Current Location)
+        from companion.services.user_geography_service import UserGeographyService
+        geo_profile, geo_updated = UserGeographyService.analyze_and_update_geography(contact, cleaned)
+        if geo_profile.origin_country:
+            extracted_items.append(("fact", "origin_country", geo_profile.origin_country, 0.95))
+        if geo_profile.origin_city:
+            extracted_items.append(("fact", "origin_city", geo_profile.origin_city, 0.95))
+        if geo_profile.current_country:
+            extracted_items.append(("fact", "current_country", geo_profile.current_country, 0.95))
+        if geo_profile.current_city:
+            extracted_items.append(("fact", "current_city", geo_profile.current_city, 0.95))
+            extracted_items.append(("fact", "city", geo_profile.current_city, 0.95))
+
+        # Check for explicit correction events (Section 30: Correction memory confidence 0.98)
+        correction_events = contact.get_correction_events()
+        for evt in correction_events[-2:]:
+            extracted_items.append(("correction", "correction_event", evt, 0.98))
+
         if contact.client_free_time:
             extracted_items.append(("fact", "free_time_schedule", contact.client_free_time, 0.90))
         if contact.no_brackets:
@@ -202,7 +214,13 @@ class MemoryManager:
             m = pattern.search(cleaned)
             if m:
                 val = m.group(0).strip()
-                if 4 <= len(val) <= 120:
+                if category == "agreement" and key == "meetup_plan":
+                    from companion.services.location_context_service import LocationContextService
+                    eff_tz = getattr(contact, "detected_timezone", None) or "Europe/Moscow"
+                    res_t = LocationContextService.resolve_temporal_phrase(cleaned, tz_name=eff_tz)
+                    if res_t and res_t.get("resolved_timestamp"):
+                        val = f"{val} [timestamp: {res_t['resolved_timestamp']}]"
+                if 4 <= len(val) <= 140:
                     extracted_items.append((category, key, val, 0.85))
 
         if not extracted_items:
@@ -381,3 +399,187 @@ class MemoryManager:
             summary_rec.updated_at = now
 
         return summary_rec
+
+    @classmethod
+    async def refresh_memory_with_llm(
+        cls,
+        session: AsyncSession,
+        contact: Contact,
+        persona: Any,
+        recent_messages: List[Dict[str, Any]],
+    ) -> bool:
+        """
+        Periodically consolidates and refreshes long-term memory from recent dialogue
+        using Gemini so conversational facts (especially where the user lives,
+        where they are from, plans, and what the persona stated about herself)
+        are never forgotten as the chat grows beyond the 10-message window.
+        """
+        if not contact or not contact.id or not recent_messages:
+            return False
+
+        from companion.ai.gemini_client import GeminiClient
+        from companion.services.health_manager import HealthManager
+        from companion.services.timezone_service import TimezoneService
+        from companion.services.user_geography_service import UserGeoProfile, UserGeographyService
+
+        if HealthManager.is_paused() or not GeminiClient.get_api_keys():
+            return False
+
+        dialogue_lines: List[str] = []
+        for m in recent_messages[-16:]:
+            role = "Парень" if m.get("role") == "user" or m.get("sender_role") == "user" else (getattr(persona, "name", None) or "Девушка")
+            txt = (m.get("text") or "").strip()
+            if txt:
+                dialogue_lines.append(f"{role}: {txt}")
+
+        if not dialogue_lines:
+            return False
+
+        known_city = contact.current_city or contact.detected_city or "неизвестно"
+        known_origin = contact.origin_city or contact.origin_country or "неизвестно"
+        persona_city = getattr(persona, "city", None) or "не указан"
+
+        extraction_prompt = (
+            "Проанализируй фрагмент переписки и обнови структурированную память.\n"
+            f"Текущие известные данные: город проживания парня={known_city}, происхождение={known_origin}, город девушки={persona_city}.\n"
+            "Правила:\n"
+            "1. Разделяй origin (откуда родом) и current (где физически живёт/находится сейчас). Не путай их.\n"
+            "2. Заполняй поля только если это прямо сказано в диалоге, иначе null.\n"
+            "3. В persona_self_facts кратко укажи, где живёт/учится/чем занимается девушка по её собственным словам в этом диалоге.\n"
+            "Верни СТРОГО валидный JSON без markdown:\n"
+            '{"user_current_city": null, "user_current_country": null, '
+            '"user_origin_city": null, "user_origin_country": null, '
+            '"user_name": null, "user_occupation": null, "user_plans": null, '
+            '"persona_self_facts": null, "summary": "1-2 предложения о чём диалог"}\n\n'
+            "ДИАЛОГ:\n" + "\n".join(dialogue_lines)
+        )
+
+        try:
+            raw = await GeminiClient.generate_content(
+                contents=extraction_prompt,
+                temperature=0.1,
+                max_output_tokens=320,
+                timeout_seconds=8.0,
+                max_retries=1,
+            )
+            if not raw:
+                return False
+
+            cleaned_json = raw.strip()
+            if cleaned_json.startswith("```"):
+                cleaned_json = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned_json, flags=re.IGNORECASE | re.DOTALL).strip()
+
+            import json
+            data = json.loads(cleaned_json)
+            if not isinstance(data, dict):
+                return False
+
+            updated = False
+            geo = UserGeoProfile.from_dict(contact.get_geo_profile())
+
+            u_curr_city = (data.get("user_current_city") or "").strip() if isinstance(data.get("user_current_city"), str) else ""
+            u_curr_country = (data.get("user_current_country") or "").strip() if isinstance(data.get("user_current_country"), str) else ""
+            u_orig_city = (data.get("user_origin_city") or "").strip() if isinstance(data.get("user_origin_city"), str) else ""
+            u_orig_country = (data.get("user_origin_country") or "").strip() if isinstance(data.get("user_origin_country"), str) else ""
+
+            to_upsert: List[Tuple[str, str, str, float]] = []
+
+            if u_curr_city and u_curr_city.lower() not in ("null", "none", "неизвестно"):
+                c_city, c_country, c_tz = UserGeographyService.match_location(u_curr_city)
+                canon_city = c_city or u_curr_city
+                canon_country = c_country or u_curr_country or geo.current_country
+                contact.current_city = canon_city
+                contact.detected_city = canon_city
+                geo.current_city = canon_city
+                if canon_country:
+                    contact.current_country = canon_country
+                    geo.current_country = canon_country
+                tz_val = c_tz or TimezoneService.resolve_timezone_for_city(canon_city)
+                if tz_val:
+                    contact.detected_timezone = tz_val
+                    geo.timezone = tz_val
+                to_upsert.append(("fact", "current_city", canon_city, 0.92))
+                to_upsert.append(("fact", "city", canon_city, 0.92))
+                if canon_country:
+                    to_upsert.append(("fact", "current_country", canon_country, 0.92))
+                updated = True
+
+            if u_orig_city and u_orig_city.lower() not in ("null", "none", "неизвестно"):
+                o_city, o_country, _ = UserGeographyService.match_location(u_orig_city)
+                canon_orig = o_city or u_orig_city
+                contact.origin_city = canon_orig
+                geo.origin_city = canon_orig
+                if o_country or u_orig_country:
+                    contact.origin_country = o_country or u_orig_country
+                    geo.origin_country = contact.origin_country
+                to_upsert.append(("fact", "origin_city", canon_orig, 0.92))
+                updated = True
+            elif u_orig_country and u_orig_country.lower() not in ("null", "none", "неизвестно"):
+                _, o_country, _ = UserGeographyService.match_location(u_orig_country)
+                contact.origin_country = o_country or u_orig_country
+                geo.origin_country = contact.origin_country
+                to_upsert.append(("fact", "origin_country", contact.origin_country, 0.92))
+                updated = True
+
+            if updated:
+                contact.set_geo_profile(geo)
+
+            for field, cat, key in [
+                ("user_name", "fact", "preferred_name"),
+                ("user_occupation", "fact", "occupation"),
+                ("user_plans", "agreement", "upcoming_plans"),
+                ("persona_self_facts", "fact", "persona_self_facts"),
+            ]:
+                val = data.get(field)
+                if isinstance(val, str) and val.strip() and val.strip().lower() not in ("null", "none"):
+                    to_upsert.append((cat, key, val.strip()[:180], 0.90))
+
+            if to_upsert:
+                stmt_existing = select(ContactMemory).where(ContactMemory.contact_id == contact.id)
+                existing_memories = {
+                    (mem.category, mem.key): mem
+                    for mem in (await session.execute(stmt_existing)).scalars().all()
+                }
+                now = datetime.now(timezone.utc)
+                for cat, key, val, conf in to_upsert:
+                    existing = existing_memories.get((cat, key))
+                    if existing:
+                        if existing.confidence <= conf and existing.value != val:
+                            existing.value = val
+                            existing.confidence = conf
+                            existing.updated_at = now
+                    else:
+                        session.add(
+                            ContactMemory(
+                                contact_id=contact.id,
+                                category=cat,
+                                key=key,
+                                value=val,
+                                confidence=conf,
+                            )
+                        )
+                updated = True
+
+            llm_summary = data.get("summary")
+            if isinstance(llm_summary, str) and len(llm_summary.strip()) > 10:
+                clean_sum = llm_summary.strip()[:450]
+                contact.dialogue_summary = clean_sum
+                stmt_sum = select(ConversationSummary).where(ConversationSummary.contact_id == contact.id)
+                sum_rec = (await session.execute(stmt_sum)).scalars().first()
+                if sum_rec:
+                    sum_rec.summary_text = clean_sum
+                    sum_rec.updated_at = datetime.now(timezone.utc)
+                updated = True
+
+            if updated:
+                await session.commit()
+                logger.info(
+                    "[MEMORY_REFRESH] Consolidated memory for contact %s (city=%s, origin=%s)",
+                    contact.id,
+                    contact.detected_city,
+                    contact.origin_city,
+                )
+            return updated
+        except Exception as e:
+            logger.debug("[MEMORY_REFRESH] Skipped or failed for contact %s: %s", contact.id, e)
+            return False

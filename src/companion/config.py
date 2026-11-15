@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,7 +34,11 @@ class Settings(BaseSettings):
 
     # AI, Context, & Media
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-flash-latest"
+    GEMINI_API_KEYS: Union[List[str], str] = []
+    GEMINI_MODEL: str = "gemini-flash-lite-latest"
+    USE_VERTEX_AI: bool = False
+    VERTEX_PROJECT: Optional[str] = "gen-lang-client-0915483038"
+    VERTEX_LOCATION: str = "us-central1"
     GEMINI_TIMEOUT_SECONDS: float = 25.0
     GEMINI_MAX_RETRIES: int = 2
     AI_RECENT_WINDOW_SIZE: int = 10
@@ -57,6 +61,12 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///companion.db"
+
+    # Persistent Photo Pool Settings
+    PHOTO_STORAGE_DIR: str = "storage/photos"
+    PHOTO_COOLDOWN_HOURS: float = 12.0
+    MAX_SPONTANEOUS_PHOTOS_PER_DAY: int = 1
+    MAX_SPONTANEOUS_PHOTOS_PER_WEEK: int = 4
 
     # Persona & Schedule Defaults
     DEFAULT_TIMEZONE: str = "Europe/Moscow"

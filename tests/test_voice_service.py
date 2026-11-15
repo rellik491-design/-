@@ -99,9 +99,10 @@ def test_safe_phonetics_and_homographs():
     assert "\u0301" not in stress_res
     assert "схожу" in stress_res
 
-    # 4. 'окей' -> 'окэй'
+    # 4. 'окей' preserves natural soft 'е' (never 'окэй')
     ok_res = VoiceService.prepare_text_for_tts("окей, договорились")
-    assert "окэй" in ok_res
+    assert "окэй" not in ok_res
+    assert "окей" in ok_res.lower()
 
 
 def test_get_dynamic_voice_settings():
@@ -202,7 +203,7 @@ def test_mastering_equalizer_post_processing():
     assert "asoftclip=type=atan" in tex_str
     assert "acompressor" in tex_str
     assert "anoisesrc=color=pink" in tex_str
-    assert "lowpass=f=12500" in tex_str
+    assert "lowpass=f=11800" in tex_str
     assert "alimiter" in tex_str
 
 
@@ -220,10 +221,10 @@ def test_russian_prosody_master_prompt_flow_and_pronunciation():
     # 2. Pronunciation correction layer (acronyms, slang, stress)
     raw_slang = "скинь мне гс в тг, я сейчас занята, кофе пью и смотрю дайвинчик"
     prep_slang = VoiceService.prepare_text_for_tts(raw_slang)
-    assert "гэ э́с" in prep_slang
-    assert "тэ гэ́" in prep_slang
+    assert "голосовое" in prep_slang
+    assert any(w in prep_slang for w in ("в телеге", "в телегу", "телеграм"))
     assert "занята́" in prep_slang
-    assert "ко́фэ" in prep_slang
+    assert "ко́фе" in prep_slang
     assert "дайви́нчик" in prep_slang
 
 

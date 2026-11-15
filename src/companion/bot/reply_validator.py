@@ -9,6 +9,7 @@ Enforces Section 6 & Section 49 rules:
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
@@ -105,3 +106,48 @@ class ReplyValidator:
             params["chat_id"] = chat_id
 
         return params
+
+    @classmethod
+    def sanitize_contact_deflection(
+        cls, text: str, allowed_bot_username: Optional[str] = None
+    ) -> str:
+        """
+        Critical Negative Rule Guard (Section 12):
+        Under NO circumstances allow the model to produce personal @usernames,
+        Instagram URLs, or phone numbers in replies.
+        If a leak is detected, replaces or strips it with natural conversational deflection.
+        """
+        if not text:
+            return text
+
+        allowed = (allowed_bot_username or "").lstrip("@").lower()
+
+        # 1. Instagram URLs
+        if re.search(r"(?i)\b(?:https?://)?(?:www\.)?instagram\.com/[a-zA-Z0-9_\.]+", text):
+            logger.warning("[SAFETY_GUARD] Intercepted Instagram URL leak in generated text: %s", text)
+            text = re.sub(
+                r"(?i)\b(?:https?://)?(?:www\.)?instagram\.com/[a-zA-Z0-9_\.]+",
+                "",
+                text,
+            ).strip()
+            if not text:
+                return "ахах, ну куда ты меня так торопишься утащить из телеги 😭"
+
+        # 2. @username mentions outside allowed bot
+        def _replace_username(match):
+            uname = match.group(1).lower()
+            if allowed and uname == allowed:
+                return match.group(0)
+            logger.warning("[SAFETY_GUARD] Intercepted @username leak: @%s", uname)
+            return ""
+
+        text = re.sub(r"@([a-zA-Z0-9_]{3,32})", _replace_username, text)
+
+        # 3. Phone numbers (e.g. +7..., 89..., etc.)
+        text = re.sub(r"(?:\+?[78])[\s\-\(]*\d{3}[\s\-\)]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}", "", text)
+
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return "ахах, давай здесь пообщаемся, мне тут намного комфортнее 😌"
+
+        return text

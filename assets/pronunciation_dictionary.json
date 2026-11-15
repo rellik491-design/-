@@ -1,471 +1,882 @@
 {
   "гс": {
     "normalized": "гс",
-    "pronunciation": "гэ э́с",
+    "pronunciation": "голосовое",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "вк": {
     "normalized": "вк",
-    "pronunciation": "вэ ка́",
+    "pronunciation": "вконтакте",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "тг": {
     "normalized": "тг",
-    "pronunciation": "тэ гэ́",
+    "pronunciation": "телеграм",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "лс": {
     "normalized": "лс",
-    "pronunciation": "эл э́с",
+    "pronunciation": "личку",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "смс": {
     "normalized": "смс",
     "pronunciation": "эс эм э́с",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "смски": {
     "normalized": "смски",
     "pronunciation": "эс эм э́ски",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "смску": {
     "normalized": "смску",
     "pronunciation": "эс эм э́ску",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "инста": {
     "normalized": "инста",
     "pronunciation": "и́нста",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "инсте": {
     "normalized": "инсте",
     "pronunciation": "и́нсте",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "инсту": {
     "normalized": "инсту",
     "pronunciation": "и́нсту",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "инсты": {
     "normalized": "инсты",
     "pronunciation": "и́нсты",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "дайвинчик": {
     "normalized": "дайвинчик",
     "pronunciation": "дайви́нчик",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "дайвинчике": {
     "normalized": "дайвинчике",
     "pronunciation": "дайви́нчике",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "дайвинчика": {
     "normalized": "дайвинчика",
     "pronunciation": "дайви́нчика",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "дайвинчику": {
     "normalized": "дайвинчику",
     "pronunciation": "дайви́нчику",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "тиндер": {
     "normalized": "тиндер",
     "pronunciation": "ти́ндер",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "тиндере": {
     "normalized": "тиндере",
     "pronunciation": "ти́ндере",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "тиндеру": {
     "normalized": "тиндеру",
     "pronunciation": "ти́ндеру",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "войс": {
     "normalized": "войс",
     "pronunciation": "войс",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "войсы": {
     "normalized": "войсы",
     "pronunciation": "во́йсы",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "войсик": {
     "normalized": "войсик",
     "pronunciation": "во́йсик",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "кружок": {
     "normalized": "кружок",
     "pronunciation": "кружо́к",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "кружочек": {
     "normalized": "кружочек",
     "pronunciation": "кружо́чек",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "кружочки": {
     "normalized": "кружочки",
     "pronunciation": "кружо́чки",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "рилс": {
     "normalized": "рилс",
     "pronunciation": "рилс",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "рилсы": {
     "normalized": "рилсы",
     "pronunciation": "ри́лсы",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "вайб": {
     "normalized": "вайб",
     "pronunciation": "вайб",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "вайбовый": {
     "normalized": "вайбовый",
     "pronunciation": "вайбо́вый",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "вайбово": {
     "normalized": "вайбово",
     "pronunciation": "вайбо́во",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "кринж": {
     "normalized": "кринж",
     "pronunciation": "кринж",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "кринжовый": {
     "normalized": "кринжовый",
     "pronunciation": "кринжо́вый",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "кринжово": {
     "normalized": "кринжово",
     "pronunciation": "кринжо́во",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "краш": {
     "normalized": "краш",
     "pronunciation": "краш",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "крашиха": {
     "normalized": "крашиха",
     "pronunciation": "краши́ха",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "трек": {
     "normalized": "трек",
-    "pronunciation": "трэк",
+    "pronunciation": "трек",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "треки": {
     "normalized": "треки",
-    "pronunciation": "трэ́ки",
+    "pronunciation": "тре́ки",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "трека": {
     "normalized": "трека",
-    "pronunciation": "трэ́ка",
+    "pronunciation": "тре́ка",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "чат": {
     "normalized": "чат",
     "pronunciation": "чат",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "чате": {
     "normalized": "чате",
     "pronunciation": "ча́те",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "чатик": {
     "normalized": "чатик",
     "pronunciation": "ча́тик",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "стикер": {
     "normalized": "стикер",
     "pronunciation": "сти́кер",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "стикеры": {
     "normalized": "стикеры",
     "pronunciation": "сти́керы",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "гифка": {
     "normalized": "гифка",
     "pronunciation": "ги́фка",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "гифку": {
     "normalized": "гифку",
     "pronunciation": "ги́фку",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "гифки": {
     "normalized": "гифки",
     "pronunciation": "ги́фки",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "кофе": {
     "normalized": "кофе",
-    "pronunciation": "ко́фэ",
+    "pronunciation": "ко́фе",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "кафе": {
     "normalized": "кафе",
-    "pronunciation": "кафэ́",
+    "pronunciation": "кафе́",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "инфо": {
     "normalized": "инфо",
     "pronunciation": "и́нфо",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "занята": {
     "normalized": "занята",
     "pronunciation": "занята́",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "поняла": {
     "normalized": "поняла",
     "pronunciation": "поняла́",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "спала": {
     "normalized": "спала",
     "pronunciation": "спала́",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "ждала": {
     "normalized": "ждала",
     "pronunciation": "ждала́",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "брала": {
     "normalized": "брала",
     "pronunciation": "брала́",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "звонит": {
     "normalized": "звонит",
     "pronunciation": "звони́т",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "звонят": {
     "normalized": "звонят",
     "pronunciation": "звоня́т",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "позвонит": {
     "normalized": "позвонит",
     "pronunciation": "позвони́т",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "позвонят": {
     "normalized": "позвонят",
     "pronunciation": "позвоня́т",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "включит": {
     "normalized": "включит",
     "pronunciation": "включи́т",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "включат": {
     "normalized": "включат",
     "pronunciation": "включа́т",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "красивее": {
     "normalized": "красивее",
     "pronunciation": "краси́вее",
     "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "облегчит": {
     "normalized": "облегчит",
     "pronunciation": "облегчи́т",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "договор": {
     "normalized": "договор",
     "pronunciation": "догово́р",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "договоры": {
     "normalized": "договоры",
     "pronunciation": "догово́ры",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "договора": {
     "normalized": "договора",
     "pronunciation": "догово́ры",
     "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "торты": {
     "normalized": "торты",
     "pronunciation": "то́рты",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "банты": {
     "normalized": "банты",
     "pronunciation": "ба́нты",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
   },
   "шарфы": {
     "normalized": "шарфы",
     "pronunciation": "ша́рфы",
     "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
     "ipa": null,
-    "confidence": 1.0
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "тебе": {
+    "normalized": "тебе",
+    "pronunciation": "тебе́",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "сегодня": {
+    "normalized": "сегодня",
+    "pronunciation": "сего́дня",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "вместе": {
+    "normalized": "вместе",
+    "pronunciation": "вме́сте",
+    "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "вечер": {
+    "normalized": "вечер",
+    "pronunciation": "ве́чер",
+    "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "вечером": {
+    "normalized": "вечером",
+    "pronunciation": "ве́чером",
+    "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "дело": {
+    "normalized": "дело",
+    "pronunciation": "де́ло",
+    "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "дела": {
+    "normalized": "дела",
+    "pronunciation": "дела́",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "успеть": {
+    "normalized": "успеть",
+    "pronunciation": "успе́ть",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "интернет": {
+    "normalized": "интернет",
+    "pronunciation": "интерне́т",
+    "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "модель": {
+    "normalized": "модель",
+    "pronunciation": "моде́ль",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "проект": {
+    "normalized": "проект",
+    "pronunciation": "прое́кт",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "тема": {
+    "normalized": "тема",
+    "pronunciation": "те́ма",
+    "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "текст": {
+    "normalized": "текст",
+    "pronunciation": "те́кст",
+    "stress": "1",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "музей": {
+    "normalized": "музей",
+    "pronunciation": "музе́й",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "бассейн": {
+    "normalized": "бассейн",
+    "pronunciation": "бассе́йн",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "одновременно": {
+    "normalized": "одновременно",
+    "pronunciation": "одновреме́нно",
+    "stress": "4",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "каталог": {
+    "normalized": "каталог",
+    "pronunciation": "катало́г",
+    "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "жалюзи": {
+    "normalized": "жалюзи",
+    "pronunciation": "жалюзи́",
+    "stress": "3",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "мастерски": {
+    "normalized": "мастерски",
+    "pronunciation": "мастерски́",
+    "stress": "4",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "эксперт": {
+    "normalized": "эксперт",
+    "pronunciation": "экспе́рт",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
+  },
+  "квартал": {
+    "normalized": "квартал",
+    "pronunciation": "кварта́л",
+    "stress": "2",
+    "stressed_spelling": null,
+    "phonetic_override": null,
+    "ipa": null,
+    "confidence": 1.0,
+    "contexts": []
   }
 }

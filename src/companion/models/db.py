@@ -32,6 +32,17 @@ async def init_db():
                 "birth_city": "VARCHAR(64) DEFAULT 'Самара'",
                 "move_reason": "TEXT DEFAULT 'Поступила в университет на дизайн и осталась жить'",
                 "years_in_city": "VARCHAR(64) DEFAULT 'Живу тут около 4 лет'",
+                "country": "VARCHAR(64) DEFAULT 'Россия'",
+                "country_code": "VARCHAR(8) DEFAULT 'RU'",
+                "sleep_time": "VARCHAR(5) DEFAULT '23:00'",
+                "wake_time": "VARCHAR(5) DEFAULT '09:00'",
+                "work_start": "VARCHAR(5) DEFAULT '10:00'",
+                "work_end": "VARCHAR(5) DEFAULT '18:00'",
+                "trip_city": "VARCHAR(64) NULL",
+                "trip_country": "VARCHAR(64) NULL",
+                "trip_country_code": "VARCHAR(8) NULL",
+                "trip_timezone": "VARCHAR(64) NULL",
+                "location_extra": "TEXT NULL",
             }
             for col_name, col_type in new_p_cols.items():
                 if col_name not in p_cols:
@@ -94,6 +105,53 @@ async def init_db():
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN discovered_profile_data TEXT NULL")
             if "dating_discovery_source" not in c_cols:
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN dating_discovery_source VARCHAR(64) NULL")
+            if "language_preference" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN language_preference TEXT NULL")
+            if "recent_language" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN recent_language VARCHAR(16) NULL")
+            if "language_pattern" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN language_pattern VARCHAR(16) NULL")
+            if "contact_deflection_count" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN contact_deflection_count INTEGER DEFAULT 0")
+            if "last_contact_request_at" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN last_contact_request_at TIMESTAMP NULL")
+            if "origin_country" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN origin_country VARCHAR(64) NULL")
+            if "current_country" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN current_country VARCHAR(64) NULL")
+            if "current_city" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN current_city VARCHAR(64) NULL")
+            if "home_country" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN home_country VARCHAR(64) NULL")
+            if "home_city" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN home_city VARCHAR(64) NULL")
+            if "family_location" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN family_location VARCHAR(64) NULL")
+            if "temporary_location" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN temporary_location VARCHAR(64) NULL")
+            if "geo_profile_data" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN geo_profile_data TEXT NULL")
+            if "active_thread" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN active_thread VARCHAR(64) DEFAULT 'general'")
+            if "correction_events" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN correction_events TEXT NULL")
+
+            # processed_messages table (Sections 10-13: Idempotency & Message Ownership)
+            sync_conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS processed_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                sender_id INTEGER NULL,
+                sender_type VARCHAR(16) DEFAULT 'USER',
+                outgoing BOOLEAN DEFAULT 0,
+                status VARCHAR(32) DEFAULT 'PROCESSED',
+                received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                processed_at TIMESTAMP NULL,
+                CONSTRAINT uq_chat_message UNIQUE (chat_id, message_id)
+            )
+            """)
+            sync_conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_proc_msg_chat_mid ON processed_messages(chat_id, message_id)")
 
             # contact_messages
             res_cm = sync_conn.exec_driver_sql("PRAGMA table_info(contact_messages)").fetchall()
@@ -113,5 +171,13 @@ async def init_db():
                     sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN is_edited BOOLEAN DEFAULT 0")
                 if "is_deleted" not in cm_cols:
                     sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN is_deleted BOOLEAN DEFAULT 0")
+                if "detected_language" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN detected_language VARCHAR(16) NULL")
+                if "language_confidence" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN language_confidence FLOAT NULL")
+                if "stt_confidence" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN stt_confidence FLOAT NULL")
+                if "normalized_text" not in cm_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN normalized_text TEXT NULL")
 
         await conn.run_sync(_migrate_sqlite_columns)

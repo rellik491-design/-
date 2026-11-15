@@ -18,11 +18,11 @@ def test_pronunciation_dictionary_seed_and_persistence():
 
         # 1. Verify seed entries loaded
         assert pd.get("гс") is not None
-        assert pd.get("гс").pronunciation == "гэ э́с"
-        assert pd.get("тг").pronunciation == "тэ гэ́"
+        assert pd.get("гс").pronunciation == "голосовое"
+        assert pd.get("тг").pronunciation == "телеграм"
         assert pd.get("занята").pronunciation == "занята́"
         assert pd.get("договор").pronunciation == "догово́р"
-        assert pd.get("кофе").pronunciation == "ко́фэ"
+        assert pd.get("кофе").pronunciation == "ко́фе"
 
         # 2. Add custom entry and check disk persistence
         pd.set("нейросеть", "нейросэ́ть", stress="3")
@@ -115,7 +115,7 @@ def test_tts_input_object_full_spec():
 
     assert isinstance(obj, TTSInputObject)
     assert obj.display_text == text
-    assert "ко́фэ" in obj.speech_text
+    assert "ко́фе" in obj.speech_text
     assert "дайви́нчик" in obj.speech_text
     # Exclamation mark transformed to avoid screaming
     assert "!" not in obj.speech_text

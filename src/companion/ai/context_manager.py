@@ -212,6 +212,32 @@ class ContextManager:
         return "\n\n".join(b for b in all_blocks if b)
 
     @classmethod
+    def detect_conversation_thread(
+        cls,
+        text: str,
+        recent_window: List[Dict[str, Any]],
+        contact: Optional[Contact] = None,
+    ) -> str:
+        """
+        Detects active topic thread (Section 22):
+        - relocation_immigrant: moving, visas, life abroad, living in another country
+        - work_career: jobs, projects, office, freelance, studies
+        - travel_trips: vacations, flights, weekend trips
+        - dating_meetup: meetup, quest, coffee, dating app context
+        - casual_lifestyle: daily life, coffee, music, leisure, banter
+        """
+        low = (text or "").lower()
+        if any(w in low for w in ["переезд", "переехал", "переїхав", "лондон", "виза", "віза", "за границей", "за кордоном", "иммигрант", "эмиграц", "адаптац", "чужая страна"]):
+            return "relocation_immigrant"
+        if any(w in low for w in ["работ", "робот", "офис", "офіс", "проект", "фриланс", "начальник", "зарплат", "собеседован", "співбесід"]):
+            return "work_career"
+        if any(w in low for w in ["поездк", "поїздк", "билет", "квиток", "самолет", "літак", "отпуск", "відпустк", "отель", "готель"]):
+            return "travel_trips"
+        if any(w in low for w in ["встреч", "зустріч", "свидани", "побаченн", "кофе", "кава", "квест", "ужин", "вечеря"]):
+            return "dating_meetup"
+        return "casual_lifestyle"
+
+    @classmethod
     async def build_seven_level_context(
         cls,
         persona: Persona,
@@ -220,6 +246,9 @@ class ContextManager:
         session: Optional[AsyncSession] = None,
         explicit_recent_history: Optional[List[Dict[str, str]]] = None,
         web_search_context: Optional[str] = None,
+        dynamic_language_profile: Optional[Any] = None,
+        contact_deflection: Optional[Any] = None,
+        user_geo_profile: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Builds the complete 7-level context package for Gemini:
@@ -264,7 +293,8 @@ class ContextManager:
             if contact.no_brackets:
                 prefs_list.append("Строго просил писать БЕЗ скобочек ')' и '('")
             if contact.language:
-                prefs_list.append(f"Язык общения: {'Русский' if contact.language == 'ru' else 'Английский'}")
+                lang_name = "Украинский" if contact.language == "uk" else ("Смешанный (суржик)" if contact.language == "mixed" else ("Английский" if contact.language == "en" else "Русский"))
+                prefs_list.append(f"Язык общения: {lang_name}")
             if contact.funnel_stage and contact.funnel_stage != "chatting":
                 ltm_list.append(f"Текущий этап воронки свидания: {contact.funnel_stage}")
 
@@ -315,6 +345,64 @@ class ContextManager:
 
         # Assemble structured context blocks
         context_blocks: List[str] = []
+
+        # Level 0: Active Conversation Thread (Section 22)
+        active_thread = cls.detect_conversation_thread(new_incoming_message, recent_window, contact)
+        thread_descriptions = {
+            "relocation_immigrant": "Переезд, жизнь за границей, адаптация, визы, сравнение стран и городов",
+            "work_career": "Работа, карьера, проекты, офис, учеба, загрузка",
+            "travel_trips": "Путешествия, поездки, отпуск, рейсы, отели",
+            "dating_meetup": "Встречи, кофе, квесты, романтика, прогулки",
+            "casual_lifestyle": "Повседневная жизнь, отдых, сериалы, музыка, юмор",
+        }
+        thread_desc = thread_descriptions.get(active_thread, "Общение и знакомство")
+        thread_block = (
+            f"[УРОВЕНЬ 0 — АКТИВНАЯ ТЕМА ДИАЛОГА (СТРОГАЯ СВЯЗНОСТЬ)]:\n"
+            f"• Текущая тема: {active_thread} ({thread_desc}).\n"
+            f"• ПРАВИЛО: Активная тема должна доминировать в ответе! Отвечай связно, не теряй нить разговора и не перескакивай на случайные фразы."
+        )
+        context_blocks.append(thread_block)
+
+        # Immigrant Geography Block: Origin != Location != Timezone != Language (Sections 1-8, 31-34)
+        from companion.services.user_geography_service import UserGeoProfile, UserGeographyService
+        effective_geo = user_geo_profile
+        if isinstance(effective_geo, dict):
+            effective_geo = UserGeoProfile.from_dict(effective_geo)
+        if not effective_geo and contact:
+            raw_geo = contact.get_geo_profile()
+            effective_geo = UserGeoProfile.from_dict(raw_geo) if isinstance(raw_geo, dict) else raw_geo
+            if effective_geo:
+                effective_geo.origin_country = effective_geo.origin_country or getattr(contact, "origin_country", None)
+                effective_geo.origin_city = effective_geo.origin_city or getattr(contact, "origin_city", None)
+                effective_geo.current_country = effective_geo.current_country or getattr(contact, "current_country", None)
+                effective_geo.current_city = effective_geo.current_city or getattr(contact, "current_city", None) or getattr(contact, "detected_city", None)
+                effective_geo.timezone = effective_geo.timezone or getattr(contact, "detected_timezone", None)
+        if effective_geo and (
+            effective_geo.origin_country
+            or effective_geo.origin_city
+            or effective_geo.current_country
+            or effective_geo.current_city
+        ):
+            geo_block = UserGeographyService.format_geo_prompt_block(effective_geo, persona)
+            if geo_block:
+                context_blocks.append(geo_block)
+
+        # Negative / Correction Memory (Highest Priority: Sections 18.E, 25, 30)
+        corrections_list: List[str] = []
+        if contact:
+            corrections_list.extend(contact.get_correction_events())
+        for mem in memories:
+            if mem.category == "correction":
+                corrections_list.append(f"{mem.key}: {mem.value}")
+        if corrections_list:
+            corr_block = (
+                "[ВЫСШИЙ ПРИОРИТЕТ — ИСПРАВЛЕНИЯ И НЕГАТИВНАЯ ПАМЯТЬ]:\n"
+                "• Собеседник прямо исправил бота в прошлых сообщениях:\n"
+                + "\n".join(f"  - {c}" for c in corrections_list[-4:])
+                + "\n• СТРОГОЕ ПРАВИЛО: Эти исправления имеют наивысший приоритет! Категорически запрещено повторять старую ошибку!"
+            )
+            context_blocks.append(corr_block)
+
         if summary_lines:
             context_blocks.append("[УРОВЕНЬ 3 — СВОДКА ДИАЛОГА]:\n" + "\n".join(f"• {s}" for s in summary_lines))
         if facts_list:
@@ -336,6 +424,42 @@ class ContextManager:
         if web_search_context:
             context_blocks.append(f"[УРОВЕНЬ 8 — ПРОВЕРЕННЫЕ ДАННЫЕ ИЗ ВНЕШНЕГО МИРА (ВЕБ-ПОИСК)]:\n{web_search_context}")
 
+        # Dynamic Language & Style Mirroring Block
+        if dynamic_language_profile:
+            p_lang = getattr(dynamic_language_profile, "primary_language", "ru")
+            s_level = getattr(dynamic_language_profile, "slang_level", 0.5)
+            p_level = getattr(dynamic_language_profile, "profanity_level", 0.0)
+            translit = getattr(dynamic_language_profile, "transliteration", False)
+            script_val = getattr(dynamic_language_profile, "script", "cyrillic")
+            lang_name = "украинском" if p_lang == "uk" else ("английском" if p_lang == "en" else ("смешанном (суржик)" if p_lang == "mixed" else "русском"))
+            lang_block = (
+                f"[ДИНАМИЧЕСКИЙ ЯЗЫКОВОЙ ПРОФИЛЬ И ЗЕРКАЛИРОВАНИЕ СТИЛЯ]:\n"
+                f"• Язык ответа: строго на {lang_name} языке ({p_lang.upper()})! Не переводи речь собеседника на другой язык.\n"
+                f"• Уровень сленга: {s_level:.1f} (отражай непринужденный молодежный стиль, понимай 'гс', 'хз', 'мб', 'спс', 'пж').\n"
+                f"• Письменность: {'собеседник пишет латиницей (транслитом), но отвечай на чистой кириллице' if translit else ('латиница' if script_val == 'latin' else 'кириллица')}."
+            )
+            context_blocks.append(lang_block)
+
+        # Anti-Instagram / Contact Deflection Block
+        if contact_deflection and getattr(contact_deflection, "deflection_required", False):
+            tone = getattr(contact_deflection, "suggested_deflection_tone", "playful_dodge")
+            c_type = getattr(contact_deflection, "contact_type", "instagram")
+            count = getattr(contact_deflection, "request_count", 1)
+            deflection_instruction = (
+                f"[ПОВЕДЕНЧЕСКИЙ БЛОК: УВОД ОТ ЗАПРОСА КОНТАКТОВ / ИНСТАГРАМА (УРОВЕНЬ {count})]:\n"
+                f"• Запрос собеседника: {c_type} (попытка получить личные соцсети, ник или номер).\n"
+                f"• СТРОЖАЙШЕЕ ПРАВИЛО: НИ В КОЕМ СЛУЧАЕ НЕ ДАВАЙ, НЕ ПРИДУМЫВАЙ, НЕ НАМЕКАЙ И НЕ ПОДТВЕРЖДАЙ СВОЙ INSTAGRAM, WHATSAPP, НОМЕР ИЛИ ТЕЛЕГРАМ-НИК!\n"
+                f"• КАТЕГОРИЧЕСКИЙ ЗАПРЕТ РОБОТИЗИРОВАННЫХ ОТКАЗОВ: никаких «Я не даю инсту», «У меня нет инсты», «Политика запрещает»!\n"
+                f"• КАТЕГОРИЧЕСКИЙ ЗАПРЕТ ЛЖИВЫХ ОТМАЗОК: никаких «забыла пароль», «телефон сломался», «заблокировали»!\n"
+                f"• НЕ ОТВЕЧАЙ, ЕСТЬ ЛИ ИНСТАГРАМ: если спрашивают «у тебя вообще есть инста?» — уходи от прямого ответа без подтверждения или отрицания!\n"
+                f"• СТРАТЕГИЯ УВОДА (РЕЖИМ: {tone.upper()}):\n"
+                f"  1. Отреагируй легко и естественно (с юмором, лёгким поддразниванием или флиртом: «ахах, а тебе зачем так срочно инста 😭», «куда ты меня уже тащишь ахах»).\n"
+                f"  2. НЕ отвечай на сам запрос контакта.\n"
+                f"  3. Перенаправь внимание на текущий разговор в Telegram («давай сначала тут нормально пообщаемся 😌», «не торопись, мы ещё тут не договорили»).\n"
+                f"  4. Если запрос повторный (уровень {count} >= 3) — обозначь спокойную или твердую личную границу без роботоподобности."
+            )
+            context_blocks.append(deflection_instruction)
+
         # Format Level 2 (Recent Conversation) + Level 1 (Current Message)
         recent_lines: List[str] = []
         for turn in recent_window[-10:]:
@@ -354,6 +478,45 @@ class ContextManager:
 
         final_prompt_contents = cls.update_context(context_blocks, history_analysis)
 
+        # Build Final Internal Context Object (Sections 9, 35)
+        internal_context = {
+            "conversation": {
+                "chat_id": contact.tg_id if contact else None,
+                "active_thread": active_thread,
+                "recent_messages_count": len(recent_window),
+                "unresolved_questions": [summary_rec.unresolved_questions] if summary_rec and summary_rec.unresolved_questions else [],
+            },
+            "user": {
+                "origin_country": (getattr(effective_geo, "origin_country", None) if effective_geo else None) or (contact.origin_country if contact else None),
+                "origin_city": (getattr(effective_geo, "origin_city", None) if effective_geo else None) or (contact.origin_city if contact else None),
+                "current_country": (getattr(effective_geo, "current_country", None) if effective_geo else None) or (contact.current_country if contact else None),
+                "current_city": (getattr(effective_geo, "current_city", None) if effective_geo else None) or (contact.current_city or (contact.detected_city if contact else None)),
+                "timezone": (getattr(effective_geo, "timezone", None) if effective_geo else None) or (contact.detected_timezone if contact else None) or "Europe/Kyiv",
+                "languages": getattr(effective_geo, "languages", {}) if effective_geo else {},
+            },
+            "language": {
+                "current": getattr(dynamic_language_profile, "primary_language", contact.language if contact else "ru"),
+                "confidence": getattr(dynamic_language_profile, "language_confidence", 0.95),
+                "style": "casual",
+            },
+            "temporal_context": {
+                "timezone": getattr(effective_geo, "timezone", "Europe/Kyiv") if effective_geo else (contact.detected_timezone if contact else "Europe/Kyiv"),
+            },
+            "intent": {
+                "active_thread": active_thread,
+                "needs_retrieval": problem_info.get("needs_retrieval", False),
+            },
+            "memory": {
+                "facts": facts_list,
+                "preferences": prefs_list,
+                "corrections": corrections_list,
+            },
+            "message_control": {
+                "bot_must_not_answer_own_message": True,
+                "target_author": "USER",
+            },
+        }
+
         return {
             "prompt_contents": final_prompt_contents,
             "recent_window": recent_window,
@@ -363,4 +526,6 @@ class ContextManager:
             "long_term_memory": ltm_list,
             "context_problem": problem_info,
             "retrieved_history": retrieved_history,
+            "internal_context": internal_context,
+            "active_thread": active_thread,
         }

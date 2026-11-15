@@ -26,31 +26,36 @@ class UserProfileService:
     - Memory confidence, updates, and contradiction corrections.
     """
 
-    # Patterns for explicit emoji preferences
+    # Patterns for explicit emoji preferences (RU + EN + UK)
     EMOJI_LESS_PATTERNS = [
         re.compile(r"\b(?:не\s+ставь|меньше|хватит|убери|без|не\s+используй)\s+(?:смайл\w*|эмодзи|эмоджи|смайликов)\b", re.IGNORECASE),
+        re.compile(r"\b(?:не\s+став|менше|годі|прибери|без|не\s+використовуй)\s+(?:смайл\w*|емодзі|смайликів)\b", re.IGNORECASE),
         re.compile(r"\b(?:too\s+many\s+emojis|less\s+emojis|no\s+emojis|stop\s+using\s+emojis|don't\s+use\s+so\s+many\s+emojis)\b", re.IGNORECASE),
     ]
 
     EMOJI_RESTORE_PATTERNS = [
         re.compile(r"\b(?:смайлики\s+(?:норм|ок|можно|люблю|нравятся)|верни\s+смайл\w*|больше\s+смайл\w*)\b", re.IGNORECASE),
+        re.compile(r"\b(?:смайлики\s+(?:норм|ок|можна|люблю|подобаються)|поверни\s+смайл\w*|більше\s+смайл\w*)\b", re.IGNORECASE),
         re.compile(r"\b(?:emojis\s+are\s+fine|actually\s+emojis\s+are\s+fine|i\s+like\s+emojis)\b", re.IGNORECASE),
     ]
 
-    # Patterns for response length preferences
+    # Patterns for response length preferences (RU + EN + UK)
     LENGTH_SHORT_PATTERNS = [
         re.compile(r"\b(?:пиши\s+короче|отвечай\s+кратко|слишком\s+длинно|коротко\s+отвечай|не\s+пиши\s+полотна|покороче)\b", re.IGNORECASE),
+        re.compile(r"\b(?:пиши\s+коротше|відповідай\s+стисло|занадто\s+довго|коротко\s+відповідай|не\s+пиши\s+полотна|покоротше)\b", re.IGNORECASE),
         re.compile(r"\b(?:prefer\s+short\s+answers?|keep\s+it\s+short|too\s+long|shorter\s+answers?)\b", re.IGNORECASE),
     ]
 
     LENGTH_DETAILED_PATTERNS = [
         re.compile(r"\b(?:пиши\s+подробнее|развернуто\s+отвечай|хочу\s+подробный\s+ответ|побольше\s+деталей)\b", re.IGNORECASE),
+        re.compile(r"\b(?:пиши\s+детальніше|розгорнуто\s+відповідай|хочу\s+детальнішу\s+відповідь|побільше\s+деталей)\b", re.IGNORECASE),
         re.compile(r"\b(?:more\s+details?|longer\s+answers?|detailed\s+answers?)\b", re.IGNORECASE),
     ]
 
-    # Name preferences
+    # Name preferences (RU + EN + UK)
     NAME_PATTERNS = [
-        re.compile(r"\b(?:зови\s+меня|называй\s+меня|лучше\s+зови|просто\s+зови)\s+([А-ЯЁA-Z][а-яёa-z]{1,20})\b", re.IGNORECASE),
+        re.compile(r"\b(?:зови\s+меня|называй\s+меня|лучше\s+зови|просто\s+зови)\s+([А-ЯЁA-ZІЇЄҐ][а-яёa-zіїєґ]{1,20})\b", re.IGNORECASE),
+        re.compile(r"\b(?:клич\s+мене|називай\s+мене|краще\s+клич|просто\s+клич)\s+([А-ЯЁA-ZІЇЄҐ][а-яёa-zіїєґ]{1,20})\b", re.IGNORECASE),
         re.compile(r"\b(?:call\s+me|just\s+call\s+me)\s+([A-Z][a-z]{1,20})\b", re.IGNORECASE),
     ]
 

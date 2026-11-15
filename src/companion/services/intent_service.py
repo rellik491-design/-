@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List
 
 
@@ -15,12 +15,29 @@ class MeetupIntent:
 class PhotoIntent:
     requested: bool
     preferred_tag: str = "general"
+    preferred_category: Optional[str] = None
+    preferred_tags: List[str] = field(default_factory=list)
+    is_repeat_request: bool = False
+    confidence: float = 0.0
+    reason: str = ""
 
 
 @dataclass
 class VoiceIntent:
     requested: bool
     preferred_tag: str = "greeting"  # greeting, meetup, sarcastic_name, etc.
+
+
+@dataclass
+class ContactDeflectionIntent:
+    contact_request: bool
+    contact_type: str = "none"  # "instagram", "phone", "whatsapp", "telegram_username", "other_social"
+    request_intensity: str = "soft"  # "soft", "normal", "persistent", "pressuring"
+    deflection_required: bool = False
+    request_count: int = 1
+    trigger: Optional[str] = None
+    suggested_deflection_tone: str = "playful_dodge"  # "playful_dodge", "stronger_dodge", "calm_boundary", "firm_boundary"
+    reason: str = ""
 
 
 class IntentService:
@@ -45,27 +62,55 @@ class IntentService:
         # Запрос номера / мессенджера для связи в реале
         (r"\b(скинь\s+(свой\s+)?номер|дай\s+(свой\s+)?номер|напиши\s+(свой\s+)?номер)\b", "number_request", 0.90),
         (r"\b(скинь\s+(ватсап|вотсап|тг|номер\s+телефона)|номер\s+телефона\s+скинь)\b", "number_request", 0.90),
+
+        # Українські пропозиції зустрічі / побачення / кави
+        (r"\b(давай\s+зустрін(емось|утись)|може\s+зустрін(емось|утись)|коли\s+зустрін(емось|утись)|хочу\s+побачит(ись|ися))\b", "direct_meet", 0.95),
+        (r"\b(підемо\s+на\s+побачення|сходи(мо|ти)\s+на\s+побачення)\b", "direct_meet", 0.99),
+        (r"\b(вип['’]ємо\s+кави|поп['’]ємо\s+кави|сходи(мо|ти)\s+на\s+каву|погуля(ємо|ти)|пішли\s+гуляти|сходи(мо|ти)\s+в\s+ресторан|сходи(мо|ти)\s+в\s+кафе)\b", "coffee_dinner", 0.95),
+        (r"\b(які\s+плани\s+на\s+вечір|що\s+робиш\s+сьогодні\s+ввечері|вільна\s+сьогодні|вільна\s+ввечері)\b", "location_ask", 0.80),
+        (r"\b(скинь\s+(свій\s+)?номер|дай\s+(свій\s+)?номер|напиши\s+(свій\s+)?номер)\b", "number_request", 0.90),
     ]
 
-    # Photo request patterns
+    # Explicit agreement to a proposed meeting / hangout / quest / coffee (RU + UK)
+    MEETUP_AGREEMENT_PATTERNS = [
+        r"\b(я\s+за|я\s+не\s+против|погнали|погнали\s+в\s+квест|пошли|пошли\s+сходим|давай\s+сходим|можем\s+сходить|я\s+согласен|договорились|с\s+удовольствием|звучит\s+круто|звучит\s+заманчиво|я\s+в\s+деле|я\s+свободен|могу\s+в\s+субботу|могу\s+в\s+воскресенье|давай\s+в\s+субботу|давай\s+в\s+воскресенье|давай\s+на\s+выходных|давай\s+с\s+тобой|я\s+только\s+за|отличная\s+идея|хорошая\s+идея|крутая\s+идея)\b",
+        r"\b(я\s+не\s+проти|пішли\s+сходимо|давай\s+сходимо|можемо\s+сходити|я\s+згоден|домовились|із\s+задоволенням|звучить\s+заманливо|я\s+в\s+ділі|я\s+вільний|можу\s+в\s+суботу|можу\s+в\s+неділю|чудова\s+ідея|гарна\s+ідея|я\s+тільки\s+за)\b",
+    ]
+
+    # Photo request patterns (RU + UK)
     PHOTO_PATTERNS = [
-        (r"\b(скинь|покажи|кинь|отправь|сделай)(\s+[\w\-]+)?\s+(фот(ку|о)|селфи)\b", 0.95),
-        (r"\b(как\s+ты\s+выглядишь|покажи\s+себя|скинь\s+себя)\b", 0.90),
+        (r"\b(скинь|покажи|кинь|отправь|надішли|сделай)(\s+[\w\-]+)?\s+(фот(ку|о)|селфи|селфі|світлину|картинк|снимок)\b", 0.95),
+        (r"\b(как\s+ты\s+выглядишь|як\s+ти\s+виглядаєш|покажи\s+себя|покажи\s+себе|скинь\s+себя|скинь\s+лицо|покажи\s+лицо)\b", 0.90),
+        (r"\b(скинь\s+свое\s+фото|скинь\s+фотку|пришли\s+фото|покажи\s+фото)\b", 0.95),
+        (r"\b(где\s+ты|что\s+вокруг|покажи\s+где\s+ты|скинь\s+вид)\b", 0.80),
     ]
 
-    # Photo tags keywords
-    PHOTO_TAG_KEYWORDS = {
-        "home": ["дома", "домашн", "кровать", "пижам", "уют"],
-        "cafe": ["кофе", "кафе", "ресторан", "чай", "обед"],
-        "gym": ["зал", "спорт", "тренировк", "фитнес"],
-        "walk": ["прогулк", "улиц", "парк", "город", "гуля"],
-        "car": ["машин", "авто", "рул"],
+    # Explicit request for the SAME/PREVIOUS photo (Section 13: Absolute no-repeat rule)
+    SAME_PHOTO_PATTERNS = [
+        r"\b(ту\s+же\s+фотку|снова\s+то\s+фото|еще\s+раз\s+то\s+фото|повтори\s+фото|скинь\s+еще\s+раз\s+ту)\b",
+        r"\b(ту\s+саму\s+фотку|знову\s+те\s+фото|ще\s+раз\s+те\s+фото)\b",
+    ]
+
+    # Photo category keywords
+    PHOTO_CATEGORY_KEYWORDS = {
+        "gym": ["зал", "спорт", "тренировк", "треня", "спортзал", "тренуванн"],
+        "home": ["дома", "домашн", "кровать", "пижам", "уют", "вдома", "ліжко", "комнат"],
+        "coffee": ["кофе", "кафе", "чай", "кава", "латте", "капучино", "чашк"],
+        "food": ["еда", "обед", "ужин", "завтрак", "пирож", "десерт", "вкусн", "їжа", "обід", "вечеря"],
+        "outdoors": ["улиц", "парк", "погод", "солнц", "дождь", "воздух", "вулиц"],
+        "city": ["город", "прогулк", "гуля", "центр", "архитектур", "місто"],
+        "pet": ["кот", "котик", "кошка", "собак", "пес", "питомец", "тваринк"],
+        "outfit": ["платье", "лук", "шмот", "наряд", "одежд", "одяг"],
+        "travel": ["поезд", "самолет", "вокзал", "дорог", "путешеств", "мандрівк"],
+        "hobby": ["рисун", "дизайн", "книг", "выставк"],
+        "selfie": ["селфи", "селфі", "себя", "себе", "лицо", "мордашку"],
     }
 
-    # Stop words / aggressive pushback / abuse
+    # Stop words / aggressive pushback / abuse (RU + UK)
     STOP_PATTERNS = [
         r"\b(отстань|отвали|не\s+пиши\s+мне|заебал|заблокирую|в\s+чс|ты\s+бот|хватит\s+спамить)\b",
-        r"\b(нахуй|пошел\s+нахуй|пошла\s+нахуй|сука|шлюха|тварь|мразь|хуйло|уебок|уебище|пидор)\b",
+        r"\b(відчепись|відвали|не\s+пиши\s+мені|заблокую|ти\s+бот|годі\s+спамити)\b",
+        r"\b(нахуй|пошел\s+нахуй|пошла\s+нахуй|пішов\s+нахуй|пішла\s+нахуй|сука|шлюха|тварь|мразь|хуйло|уебок|уебище|пидор)\b",
     ]
 
     @classmethod
@@ -87,31 +132,64 @@ class IntentService:
         return MeetupIntent(is_proposal=False, confidence=0.0)
 
     @classmethod
-    def detect_photo_request(cls, text: str) -> PhotoIntent:
+    def detect_meetup_agreement(cls, text: str) -> bool:
         """
-        Detects if the user is asking for a photo and infers preferred context/tag.
+        Detects if the interlocutor actively agrees to meet, hang out, go to a quest or coffee.
         """
         cleaned = text.lower()
+        for pattern in cls.MEETUP_AGREEMENT_PATTERNS:
+            if re.search(pattern, cleaned):
+                return True
+        return False
+
+    @classmethod
+    def detect_photo_request(cls, text: str) -> PhotoIntent:
+        """
+        Detects if the user is asking for a photo, infers preferred category/tags,
+        and detects if the user is asking for the exact same previous photo.
+        """
+        cleaned = text.lower()
+
+        # Check for request of the SAME/PREVIOUS photo
+        for pattern in cls.SAME_PHOTO_PATTERNS:
+            if re.search(pattern, cleaned):
+                return PhotoIntent(
+                    requested=True,
+                    is_repeat_request=True,
+                    confidence=0.95,
+                    reason="User explicitly requested the same photo again. Absolute no-repeat rule applies.",
+                )
+
         is_requested = False
-        for pattern, _ in cls.PHOTO_PATTERNS:
+        confidence = 0.0
+        for pattern, conf in cls.PHOTO_PATTERNS:
             if re.search(pattern, cleaned):
                 is_requested = True
-                break
+                confidence = max(confidence, conf)
 
         if not is_requested:
             return PhotoIntent(requested=False)
 
-        # Infer tag
-        chosen_tag = "general"
-        for tag, keywords in cls.PHOTO_TAG_KEYWORDS.items():
+        # Infer category and tags
+        chosen_cat = None
+        matched_tags = []
+        for cat, keywords in cls.PHOTO_CATEGORY_KEYWORDS.items():
             for kw in keywords:
                 if kw in cleaned:
-                    chosen_tag = tag
-                    break
-            if chosen_tag != "general":
-                break
+                    if not chosen_cat:
+                        chosen_cat = cat
+                    matched_tags.append(kw)
 
-        return PhotoIntent(requested=True, preferred_tag=chosen_tag)
+        chosen_tag = chosen_cat or "general"
+        return PhotoIntent(
+            requested=True,
+            preferred_tag=chosen_tag,
+            preferred_category=chosen_cat or "general",
+            preferred_tags=matched_tags,
+            is_repeat_request=False,
+            confidence=confidence,
+            reason="explicit_user_request",
+        )
 
     @classmethod
     def is_stop_word_present(cls, text: str) -> bool:
@@ -123,9 +201,9 @@ class IntentService:
         return False
 
     VOICE_PATTERNS = [
-        r"\b(скинь|запиши|отправь|кинь)\s+(войс|голосовуху|голосовое|гс)\b",
-        r"\b(скажи\s+голосом|хочу\s+(услышать|послушать)\s+голос|поговори\s+голосом)\b",
-        r"\b(ты\s+точно\s+девушка|ты\s+не\s+бот|докажи\s+что\s+не\s+бот|запиши\s+кружок)\b",
+        r"\b(скинь|запиши|отправь|кинь|надішли)\s+(войс|голосовуху|голосове|гс)\b",
+        r"\b(скажи\s+голосом|хочу\s+(услышать|послушать|почути|послухати)\s+голос|поговори\s+голосом)\b",
+        r"\b(ты\s+точно\s+девушка|ти\s+точно\s+дівчина|ты\s+не\s+бот|ти\s+не\s+бот|докажи\s+(что|що)\s+не\s+бот|запиши\s+(кружок|кружечок))\b",
     ]
 
     @classmethod
@@ -134,9 +212,9 @@ class IntentService:
         cleaned = text.lower()
         for pattern in cls.VOICE_PATTERNS:
             if re.search(pattern, cleaned):
-                if any(w in cleaned for w in ["кофе", "встрет", "увид", "где", "когда"]):
+                if any(w in cleaned for w in ["кофе", "кава", "встрет", "зустрін", "увид", "побач", "где", "де", "когда", "коли"]):
                     return VoiceIntent(requested=True, preferred_tag="meetup")
-                if any(w in cleaned for w in ["издева", "бот", "фейк", "докажи", "точно", "кружок"]):
+                if any(w in cleaned for w in ["издева", "знуща", "бот", "фейк", "докажи", "точно", "кружок", "кружечок"]):
                     return VoiceIntent(requested=True, preferred_tag="sarcastic_name")
                 return VoiceIntent(requested=True, preferred_tag="greeting")
         return VoiceIntent(requested=False)
@@ -149,6 +227,10 @@ class IntentService:
         r"(?i)\b(попробуй\s+(?:писать\s+)?без\s+скоб(?:ок|очек)?|пиши\s+без\s+скоб(?:ок|очек)?)\b",
         r"(?i)\b(давай\s+без\s+скоб(?:ок|очек)?|хватит\s+скобочек)\b",
         r"(?i)\b(без\s+смайл(?:ов|иков)?|хватит\s+смайл(?:ов|иков)?|не\s+ставь\s+смайл(?:ы|ики)?)\b",
+        # Українські запити без дужок / смайликів
+        r"(?i)\b(без\s+дужок|не\s+став\s+дужки|годі\s+(?:ставити\s+)?дуж(?:ки|ок|ками)?|навіщо\s+дужки)\b",
+        r"(?i)\b(прибери\s+дужки|перестань\s+ставити\s+дужки|пиши\s+без\s+дужок|давай\s+без\s+дужок)\b",
+        r"(?i)\b(без\s+смайликів|годі\s+смайликів|не\s+став\s+смайлики)\b",
     ]
 
     @classmethod
@@ -192,5 +274,92 @@ class IntentService:
                 return "closure"
 
         return None
+
+    # =========================================================================
+    # ANTI-INSTAGRAM & PERSONAL CONTACT DEFLECTION PATTERNS
+    # =========================================================================
+    INSTAGRAM_DEFLECTION_PATTERNS = [
+        # Direct Instagram requests (RU + UK + EN)
+        (r"\b(инст[аеуыо]?|инстаграм|инстаграмм|instagram|insta|ig|інст[ауіе]?|інстаграм)\b", "instagram", 0.95),
+        (r"\b(скинь|кинь|дай|напиши|покажи|какой|можно|где|пойдем\s+в|пойдём\s+в|давай\s+в|перейдем\s+в|перейдём\s+в|пішли\s+в|давай\s+в)\s+.*(инст|instagram|insta|ig|інст)\b", "instagram", 0.98),
+        (r"\b(ссылк[уа]\s+на\s+(инст|профиль)|профиль\s+в\s+инсте|твой\s+(инст|instagram)|твій\s+інст)\b", "instagram", 0.95),
+        # Existence inquiries ("у тебя вообще есть инста?")
+        (r"\b(у\s+тебя\s+(вообще\s+)?есть\s+инст|ты\s+есть\s+в\s+инст|сидишь\s+в\s+инст|ведешь\s+инст|чи\s+є\s+(в\s+тебе\s+)?інст|ти\s+є\s+в\s+інст)\b", "instagram", 0.90),
+    ]
+
+    OTHER_CONTACT_DEFLECTION_PATTERNS = [
+        # Usernames, Telegram @ outside chat, handles
+        (r"\b(дай|скинь|твой|напиши|кинь|какой)\s+@", "telegram_username", 0.95),
+        (r"\b(дай|скинь|напиши|какой|твой|кинь)\s+(свой\s+)?(юзернейм|ник|username|тг\s+ник|профиль|контакт)\b", "telegram_username", 0.90),
+        (r"\b(дай|скинь|напиши|какой|твой|кинь)\s+(свій\s+)?(юзернейм|нік|username|профіль)\b", "telegram_username", 0.90),
+        # Phone numbers & WhatsApp
+        (r"\b(номер\s+телефона|твой\s+номер|твій\s+номер|скинь\s+(свой\s+)?номер|дай\s+(свой\s+)?номер|напиши\s+цифры)\b", "phone", 0.95),
+        (r"\b(ватсап|вацап|whatsapp|вотсап|вотсапп)\b", "whatsapp", 0.95),
+        (r"\b(тикток|tiktok|снапчат|snapchat)\b", "other_social", 0.90),
+        # Where to find you
+        (r"\b(где\s+тебя\s+найти|как\s+тебя\s+найти|как\s+тебя\s+искать|де\s+тебе\s+знайти|як\s+тебе\s+знайти)\b", "other_social", 0.85),
+        # Manipulation / framing attempts
+        (r"\b(ну\s+просто\s+ник|хотя\s+бы\s+первые\s+буквы|я\s+никому\s+не\s+скажу|это\s+же\s+не\s+номер|ну\s+кинь\s+ссылку|да\s+я\s+просто\s+посмотрю|это\s+же\s+безопасно|ты\s+же\s+мне\s+доверяешь|если\s+нравлюсь\s+дай|докажи\s+что\s+нравлюсь|это\s+всего\s+лишь\s+инста)\b", "instagram", 0.95),
+    ]
+
+    @classmethod
+    def detect_contact_request(
+        cls, text: str, contact_deflection_count: int = 0
+    ) -> ContactDeflectionIntent:
+        """
+        Classifies incoming messages for personal contact requests (Instagram, WhatsApp,
+        usernames, phone numbers). Enforces multi-level deflection progression.
+        """
+        cleaned = text.lower()
+
+        matched_type = None
+        matched_trigger = None
+        confidence = 0.0
+
+        for pattern, c_type, conf in cls.INSTAGRAM_DEFLECTION_PATTERNS:
+            m = re.search(pattern, cleaned)
+            if m:
+                matched_type = c_type
+                matched_trigger = m.group(0)
+                confidence = conf
+                break
+
+        if not matched_type:
+            for pattern, c_type, conf in cls.OTHER_CONTACT_DEFLECTION_PATTERNS:
+                m = re.search(pattern, cleaned)
+                if m:
+                    matched_type = c_type
+                    matched_trigger = m.group(0)
+                    confidence = conf
+                    break
+
+        if not matched_type:
+            return ContactDeflectionIntent(contact_request=False, deflection_required=False)
+
+        req_count = contact_deflection_count + 1
+
+        if req_count <= 1:
+            intensity = "soft"
+            tone = "playful_dodge"
+        elif req_count == 2:
+            intensity = "normal"
+            tone = "stronger_dodge"
+        elif req_count == 3:
+            intensity = "persistent"
+            tone = "calm_boundary"
+        else:
+            intensity = "pressuring"
+            tone = "firm_boundary"
+
+        return ContactDeflectionIntent(
+            contact_request=True,
+            contact_type=matched_type,
+            request_intensity=intensity,
+            deflection_required=True,
+            request_count=req_count,
+            trigger=matched_trigger,
+            suggested_deflection_tone=tone,
+            reason=f"Detected {matched_type} request: '{matched_trigger}' (count={req_count})",
+        )
 
 

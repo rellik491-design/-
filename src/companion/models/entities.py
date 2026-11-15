@@ -10,6 +10,7 @@ from sqlalchemy import (
     Text,
     Date,
     Float,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from companion.models.db import Base
@@ -160,9 +161,20 @@ class Persona(Base):
         Text, default="Поступила в университет на дизайн и осталась жить", nullable=True
     )
     years_in_city: Mapped[Optional[str]] = mapped_column(String(64), default="Живу тут около 4 лет", nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(64), default="Россия", nullable=True)
+    country_code: Mapped[Optional[str]] = mapped_column(String(8), default="RU", nullable=True)
     timezone_name: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
     sleep_start: Mapped[str] = mapped_column(String(5), default="23:00")  # HH:MM (основной сон с 23:00)
     sleep_end: Mapped[str] = mapped_column(String(5), default="09:00")    # HH:MM (до 09:00, ~9 часов сна)
+    sleep_time: Mapped[Optional[str]] = mapped_column(String(5), default="23:00", nullable=True)
+    wake_time: Mapped[Optional[str]] = mapped_column(String(5), default="09:00", nullable=True)
+    work_start: Mapped[Optional[str]] = mapped_column(String(5), default="10:00", nullable=True)
+    work_end: Mapped[Optional[str]] = mapped_column(String(5), default="18:00", nullable=True)
+    trip_city: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    trip_country: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    trip_country_code: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    trip_timezone: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    location_extra: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     legend: Mapped[str] = mapped_column(
         Text,
         default="Ты общительная, милая и немного саркастичная девушка. Учишься на дизайне и любишь кофе.",
@@ -172,6 +184,16 @@ class Persona(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     user: Mapped["User"] = relationship(back_populates="personas")
+
+    def set_temporary_trip(
+        self, trip_city: str, trip_country: Optional[str] = None, trip_timezone: Optional[str] = None
+    ):
+        from companion.services.location_context_service import LocationContextService
+        return LocationContextService.set_temporary_trip(self, trip_city, trip_country, trip_timezone)
+
+    def clear_temporary_trip(self):
+        from companion.services.location_context_service import LocationContextService
+        return LocationContextService.clear_temporary_trip(self)
 
 
 class Contact(Base):
@@ -240,6 +262,25 @@ class Contact(Base):
     dialogue_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     dialogue_topics: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
 
+    # Dynamic Language & Contact Deflection State
+    language_preference: Mapped[Optional[str]] = mapped_column(Text, default="{}", nullable=True)
+    recent_language: Mapped[Optional[str]] = mapped_column(String(16), default="ru", nullable=True)
+    language_pattern: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    contact_deflection_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_contact_request_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # Immigrant Geography & Conversation Threads State
+    origin_country: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    current_country: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    current_city: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    home_country: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    home_city: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    family_location: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    temporary_location: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    geo_profile_data: Mapped[Optional[str]] = mapped_column(Text, default="{}", nullable=True)
+    active_thread: Mapped[Optional[str]] = mapped_column(String(64), default="general", nullable=True)
+    correction_events: Mapped[Optional[str]] = mapped_column(Text, default="[]", nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
@@ -276,6 +317,40 @@ class Contact(Base):
         import json
         self.discovered_profile_data = json.dumps(data, ensure_ascii=False)
 
+    def get_geo_profile(self) -> dict:
+        """Returns structured Immigrant Geography & User Context Model as dict."""
+        if not self.geo_profile_data:
+            return {}
+        try:
+            import json
+            return json.loads(self.geo_profile_data)
+        except Exception:
+            return {}
+
+    def set_geo_profile(self, data: Any) -> None:
+        """Stores structured Immigrant Geography profile data as JSON."""
+        import json
+        if hasattr(data, "to_dict"):
+            data = data.to_dict()
+        self.geo_profile_data = json.dumps(data, ensure_ascii=False)
+
+    def get_correction_events(self) -> list:
+        """Returns list of recorded negative / correction memory events."""
+        if not self.correction_events:
+            return []
+        try:
+            import json
+            return json.loads(self.correction_events)
+        except Exception:
+            return []
+
+    def add_correction_event(self, correction_data: dict) -> None:
+        """Appends a negative/correction memory event."""
+        import json
+        events = self.get_correction_events()
+        events.append(correction_data)
+        self.correction_events = json.dumps(events[-30:], ensure_ascii=False)
+
 
 class ContactMessage(Base):
     __tablename__ = "contact_messages"
@@ -298,6 +373,10 @@ class ContactMessage(Base):
     violation_analysis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_edited: Mapped[bool] = mapped_column(Boolean, default=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    detected_language: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    language_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    stt_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    normalized_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
@@ -386,6 +465,34 @@ class ProcessedUpdate(Base):
     chat_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     processed_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
+class ProcessedMessage(Base):
+    """
+    Message-level Idempotency, Ownership & Self-Response Protection Table (Sections 10–13).
+    Ensures:
+    - Unique processing key: (chat_id, message_id)
+    - Classification by sender_type: USER, BOT, OTHER
+    - Outgoing registration BEFORE polling/webhook pickups
+    - Hard self-response block
+    """
+    __tablename__ = "processed_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[int] = mapped_column(Integer, index=True)
+    message_id: Mapped[int] = mapped_column(Integer, index=True)
+    sender_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    sender_type: Mapped[str] = mapped_column(String(16), default="USER")  # "USER", "BOT", "OTHER"
+    outgoing: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="PROCESSED")  # "RECEIVED", "PROCESSING", "PROCESSED", "IGNORED_SELF", "OUTGOING"
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("chat_id", "message_id", name="uq_chat_message"),
     )
 
 
@@ -489,4 +596,114 @@ class DaivinchikProfile(Base):
     )
 
     user: Mapped["User"] = relationship()
+
+
+class PersonaPhoto(Base):
+    """
+    Persistent photo pool asset belonging to the bot's persona.
+    Identified by a stable internal photo_id and verified by cryptographic SHA-256 and perceptual dHash.
+    """
+    __tablename__ = "persona_photos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    photo_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    persona_id: Mapped[Optional[int]] = mapped_column(ForeignKey("personas.id"), nullable=True, index=True)
+    telegram_file_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    file_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # SHA-256
+    perceptual_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)  # dHash
+    storage_path: Mapped[str] = mapped_column(String(512))
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    mime_type: Mapped[str] = mapped_column(String(32), default="image/jpeg")
+    category: Mapped[str] = mapped_column(String(64), default="casual", index=True)
+    tags: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
+    mood: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
+    contexts: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
+    description: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    times_used: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+    usages: Mapped[List["ChatPhotoUsage"]] = relationship(
+        back_populates="photo", cascade="all, delete-orphan"
+    )
+
+    def get_tags(self) -> List[str]:
+        try:
+            import json
+            return json.loads(self.tags) if self.tags else []
+        except Exception:
+            return []
+
+    def set_tags(self, tags_list: List[str]) -> None:
+        import json
+        self.tags = json.dumps([t.strip().lower() for t in tags_list if t], ensure_ascii=False)
+
+    def get_mood(self) -> List[str]:
+        try:
+            import json
+            return json.loads(self.mood) if self.mood else []
+        except Exception:
+            return []
+
+    def set_mood(self, mood_list: List[str]) -> None:
+        import json
+        self.mood = json.dumps([m.strip().lower() for m in mood_list if m], ensure_ascii=False)
+
+    def get_contexts(self) -> List[str]:
+        try:
+            import json
+            return json.loads(self.contexts) if self.contexts else []
+        except Exception:
+            return []
+
+    def set_contexts(self, ctx_list: List[str]) -> None:
+        import json
+        self.contexts = json.dumps([c.strip().lower() for c in ctx_list if c], ensure_ascii=False)
+
+    def to_dict(self) -> dict:
+        return {
+            "photo_id": self.photo_id,
+            "telegram_file_id": self.telegram_file_id,
+            "file_hash": self.file_hash,
+            "perceptual_hash": self.perceptual_hash,
+            "storage_path": self.storage_path,
+            "category": self.category,
+            "tags": self.get_tags(),
+            "mood": self.get_mood(),
+            "contexts": self.get_contexts(),
+            "description": self.description,
+            "enabled": self.enabled,
+            "times_used": self.times_used,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class ChatPhotoUsage(Base):
+    """
+    Per-chat persistent usage tracking table.
+    Enforces the ABSOLUTE NO-REPEAT RULE via UNIQUE(chat_id, photo_id).
+    Once a photo is used or reserved in chat_id, it can NEVER be repeated in that chat.
+    """
+    __tablename__ = "chat_photo_usage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[str] = mapped_column(String(64), index=True)
+    photo_id: Mapped[str] = mapped_column(ForeignKey("persona_photos.photo_id", ondelete="CASCADE"), index=True)
+    first_used_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), index=True
+    )
+    message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="reserved", index=True)  # reserved, sent, send_failed
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    selection_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    photo: Mapped["PersonaPhoto"] = relationship(back_populates="usages")
+
+    __table_args__ = (
+        UniqueConstraint("chat_id", "photo_id", name="uq_chat_photo_usage"),
+    )
 

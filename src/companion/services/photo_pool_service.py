@@ -301,6 +301,7 @@ class PhotoPoolService:
             current_hour=current_hour,
             reason=reason or ("explicit_request" if is_explicit_request else "contextual"),
             user_id=user_id,
+            persona_id=persona_id,
             now=now,
             enforce_cooldown=not is_explicit_request,
             require_disk_file=False,
@@ -400,16 +401,48 @@ class PhotoPoolService:
         session: AsyncSession,
         enabled_only: bool = False,
         category: Optional[str] = None,
+        persona_id: Optional[int] = None,
+        user_id: Optional[int] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> List[PersonaPhoto]:
-        """Lists photos with optional category and enabled filtering."""
+        """Lists photos with optional category, persona_id, and enabled filtering."""
         return await PhotoRepository.list_photos(
             session=session,
             active_only=enabled_only,
             category=category,
+            persona_id=persona_id,
+            user_id=user_id,
             limit=limit,
             offset=offset,
+        )
+
+    @classmethod
+    async def get_persona_photo_stats(
+        cls,
+        session: AsyncSession,
+        persona_id: Optional[int],
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Returns photo statistics for a specific model persona."""
+        return await PhotoRepository.get_persona_photo_stats(
+            session=session,
+            persona_id=persona_id,
+            user_id=user_id,
+        )
+
+    @classmethod
+    async def clear_persona_photos(
+        cls,
+        session: AsyncSession,
+        persona_id: int,
+        delete_files: bool = True,
+    ) -> int:
+        """Clears all photos bound to a specific model persona."""
+        return await PhotoRepository.clear_persona_photos(
+            session=session,
+            persona_id=persona_id,
+            delete_files=delete_files,
         )
 
     @classmethod

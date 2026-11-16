@@ -663,6 +663,7 @@ class BusinessChatBot:
                             photo_id=p_id,
                             allow_existing_reservation=True,
                             enforce_cooldown=True,
+                            persona_id=getattr(account, "persona_id", None),
                         )
                         if gate_ok:
                             await cls.send_business_chat_action(token, connection_id, chat_id, "upload_photo")

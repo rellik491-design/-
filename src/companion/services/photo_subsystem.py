@@ -251,6 +251,8 @@ class PhotoRepository:
         session: AsyncSession,
         active_only: bool = False,
         category: Optional[str] = None,
+        persona_id: Optional[int] = None,
+        user_id: Optional[int] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> List[PersonaPhoto]:
@@ -259,9 +261,70 @@ class PhotoRepository:
             stmt = stmt.where(PersonaPhoto.enabled.is_(True))
         if category:
             stmt = stmt.where(PersonaPhoto.category == category.lower().strip())
+        if persona_id is not None:
+            stmt = stmt.where(PersonaPhoto.persona_id == persona_id)
+        elif user_id is not None:
+            stmt = stmt.where(PersonaPhoto.user_id == user_id)
         stmt = stmt.order_by(desc(PersonaPhoto.created_at), desc(PersonaPhoto.id)).offset(offset).limit(limit)
         res = await session.execute(stmt)
         return list(res.scalars().all())
+
+    @classmethod
+    async def get_persona_photo_stats(
+        cls,
+        session: AsyncSession,
+        persona_id: Optional[int],
+        user_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Returns photo counts and category breakdown for a specific model persona."""
+        conds = []
+        if persona_id is not None:
+            conds.append(PersonaPhoto.persona_id == persona_id)
+        elif user_id is not None:
+            conds.append(PersonaPhoto.user_id == user_id)
+
+        stmt_total = select(func.count(PersonaPhoto.id))
+        stmt_active = select(func.count(PersonaPhoto.id)).where(PersonaPhoto.enabled.is_(True))
+        stmt_cats = select(PersonaPhoto.category, func.count(PersonaPhoto.id)).group_by(PersonaPhoto.category)
+        if conds:
+            stmt_total = stmt_total.where(*conds)
+            stmt_active = stmt_active.where(*conds)
+            stmt_cats = stmt_cats.where(*conds)
+
+        total = (await session.execute(stmt_total)).scalar() or 0
+        active = (await session.execute(stmt_active)).scalar() or 0
+        cats = {row[0]: row[1] for row in (await session.execute(stmt_cats)).fetchall() if row[0]}
+        return {
+            "total_photos": total,
+            "active_photos": active,
+            "disabled_photos": max(0, total - active),
+            "categories": cats,
+        }
+
+    @classmethod
+    async def clear_persona_photos(
+        cls,
+        session: AsyncSession,
+        persona_id: int,
+        delete_files: bool = True,
+    ) -> int:
+        """Deletes all photos bound to a specific model persona_id."""
+        photos = await cls.list_photos(session, persona_id=persona_id, limit=10000)
+        if not photos:
+            return 0
+        photo_ids = [p.photo_id for p in photos]
+        file_paths = [p.storage_path for p in photos if p.storage_path]
+        await session.execute(delete(ChatPhotoUsage).where(ChatPhotoUsage.photo_id.in_(photo_ids)))
+        await session.execute(delete(PersonaPhoto).where(PersonaPhoto.persona_id == persona_id))
+        await session.commit()
+        if delete_files:
+            for fp in file_paths:
+                if os.path.exists(fp):
+                    try:
+                        os.remove(fp)
+                    except Exception:
+                        pass
+        return len(photos)
 
     @classmethod
     async def set_active(cls, session: AsyncSession, photo_id: str, is_active: bool) -> Optional[PersonaPhoto]:
@@ -449,6 +512,19 @@ class PhotoUploadManager:
         # 1. Exact duplicate check (SHA-256)
         existing_exact = await PhotoRepository.get_by_sha256(session, sha256_hash)
         if existing_exact:
+            if persona_id is not None and existing_exact.persona_id != persona_id:
+                existing_exact.persona_id = persona_id
+                if user_id is not None:
+                    existing_exact.user_id = user_id
+                await session.commit()
+                await session.refresh(existing_exact)
+                log_photo_event(
+                    "PHOTO_UPLOAD",
+                    photo_id=existing_exact.photo_id,
+                    result="REBOUND_TO_PERSONA",
+                    persona_id=persona_id,
+                )
+                return existing_exact, True
             log_photo_event(
                 "PHOTO_DUPLICATE",
                 photo_id=existing_exact.photo_id,
@@ -457,12 +533,21 @@ class PhotoUploadManager:
             )
             return existing_exact, False
 
-        # 2. Perceptual duplicate check (dHash)
+        # 2. Perceptual duplicate check (dHash) within same persona scope
         if dhash and hamming_threshold >= 0:
             all_dhash_photos = await PhotoRepository.get_all_with_dhash(session)
             for p in all_dhash_photos:
+                if persona_id is not None and p.persona_id is not None and p.persona_id != persona_id:
+                    continue
                 dist = cls.hamming_distance(dhash, p.perceptual_hash)
                 if dist <= hamming_threshold:
+                    if persona_id is not None and p.persona_id is None:
+                        p.persona_id = persona_id
+                        if user_id is not None:
+                            p.user_id = user_id
+                        await session.commit()
+                        await session.refresh(p)
+                        return p, True
                     log_photo_event(
                         "PHOTO_DUPLICATE",
                         photo_id=p.photo_id,
@@ -970,6 +1055,7 @@ class PhotoEligibilityService:
         session: AsyncSession,
         chat_id: Union[str, int],
         user_id: Optional[int] = None,
+        persona_id: Optional[int] = None,
         verify_disk: bool = False,
     ) -> int:
         chat_key = str(chat_id)
@@ -981,7 +1067,12 @@ class PhotoEligibilityService:
             PersonaPhoto.enabled.is_(True),
             PersonaPhoto.photo_id.not_in(subq_used),
         )
-        if user_id is not None:
+        if persona_id is not None:
+            stmt = stmt.where(
+                (PersonaPhoto.persona_id == persona_id)
+                | (PersonaPhoto.persona_id.is_(None) & PersonaPhoto.user_id.is_(None))
+            )
+        elif user_id is not None:
             stmt = stmt.where(
                 (PersonaPhoto.user_id == user_id) | (PersonaPhoto.user_id.is_(None))
             )
@@ -1009,6 +1100,7 @@ class PhotoEligibilityService:
         session: AsyncSession,
         chat_id: Union[str, int],
         user_id: Optional[int] = None,
+        persona_id: Optional[int] = None,
         now: Optional[datetime] = None,
         enforce_cooldown: bool = True,
         verify_disk: bool = False,
@@ -1056,7 +1148,9 @@ class PhotoEligibilityService:
                 result="CHAT_COOLDOWN",
                 next_allowed_at=cd_info["next_allowed_at_iso"],
             )
-            unused_cnt = await cls.count_unused_active_photos(session, chat_key, user_id=user_id, verify_disk=verify_disk)
+            unused_cnt = await cls.count_unused_active_photos(
+                session, chat_key, user_id=user_id, persona_id=persona_id, verify_disk=verify_disk
+            )
             return PhotoEligibilityResult(
                 allowed=False,
                 reason="CHAT_COOLDOWN",
@@ -1079,7 +1173,9 @@ class PhotoEligibilityService:
             )
 
         # 5. Check available unused photos for this chat
-        unused_cnt = await cls.count_unused_active_photos(session, chat_key, user_id=user_id, verify_disk=verify_disk)
+        unused_cnt = await cls.count_unused_active_photos(
+            session, chat_key, user_id=user_id, persona_id=persona_id, verify_disk=verify_disk
+        )
         if unused_cnt <= 0:
             log_photo_event(
                 "PHOTO_POOL_EMPTY",
@@ -1110,6 +1206,7 @@ class PhotoEligibilityService:
         session: AsyncSession,
         chat_id: Union[str, int],
         user_id: Optional[int] = None,
+        persona_id: Optional[int] = None,
         now: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
@@ -1119,6 +1216,7 @@ class PhotoEligibilityService:
             session=session,
             chat_id=chat_id,
             user_id=user_id,
+            persona_id=persona_id,
             now=now,
             enforce_cooldown=True,
         )
@@ -1173,6 +1271,7 @@ class PhotoSelector:
         current_hour: Optional[int] = None,
         reason: str = "contextual",
         user_id: Optional[int] = None,
+        persona_id: Optional[int] = None,
         now: Optional[datetime] = None,
         enforce_cooldown: bool = True,
         require_disk_file: bool = True,
@@ -1184,6 +1283,7 @@ class PhotoSelector:
             session=session,
             chat_id=chat_key,
             user_id=user_id,
+            persona_id=persona_id,
             now=now,
             enforce_cooldown=enforce_cooldown,
             verify_disk=require_disk_file,
@@ -1191,7 +1291,7 @@ class PhotoSelector:
         if not elig.allowed:
             return None
 
-        # 2. Fetch unused active candidates for this chat
+        # 2. Fetch unused active candidates for this chat & specific model persona
         subq_used = select(ChatPhotoUsage.photo_id).where(
             ChatPhotoUsage.chat_id == chat_key,
             ChatPhotoUsage.status.in_(["reserved", "sent", "send_failed", "uncertain"]),
@@ -1200,7 +1300,12 @@ class PhotoSelector:
             PersonaPhoto.enabled.is_(True),
             PersonaPhoto.photo_id.not_in(subq_used),
         )
-        if user_id is not None:
+        if persona_id is not None:
+            stmt = stmt.where(
+                (PersonaPhoto.persona_id == persona_id)
+                | (PersonaPhoto.persona_id.is_(None) & PersonaPhoto.user_id.is_(None))
+            )
+        elif user_id is not None:
             stmt = stmt.where(
                 (PersonaPhoto.user_id == user_id) | (PersonaPhoto.user_id.is_(None))
             )
@@ -1303,13 +1408,14 @@ async def PHOTO_SEND_GATE(
     now: Optional[datetime] = None,
     allow_existing_reservation: bool = True,
     enforce_cooldown: bool = True,
+    persona_id: Optional[int] = None,
 ) -> Tuple[bool, str]:
     """
     Mandatory 10-point application-level hard gate before ANY photo is sent (Section 43).
     Verifies:
       1. Bot photo selection is healthy / enabled
       2. Photo exists in database
-      3. Photo is active (is_active / enabled)
+      3. Photo is active (is_active / enabled) and matches persona_id if specified
       4. Photo file exists on persistent storage and is readable
       5. Chat identity is valid
       6. 12-hour per-chat cooldown has expired
@@ -1334,9 +1440,11 @@ async def PHOTO_SEND_GATE(
     if not photo:
         return False, "PHOTO_NOT_FOUND"
 
-    # 3. Photo is active
+    # 3. Photo is active & bound to matching persona_id
     if not photo.enabled:
         return False, "PHOTO_DISABLED"
+    if persona_id is not None and photo.persona_id is not None and photo.persona_id != persona_id:
+        return False, "PERSONA_MISMATCH"
 
     # 4. Photo file exists in persistent storage
     if not photo.storage_path or not os.path.exists(photo.storage_path) or os.path.getsize(photo.storage_path) <= 0:
@@ -1430,6 +1538,7 @@ class PhotoSendService:
         send_transport_fn: Callable[[PersonaPhoto, Optional[str]], Awaitable[Optional[int]]],
         caption: Optional[str] = None,
         user_id: Optional[int] = None,
+        persona_id: Optional[int] = None,
         current_hour: Optional[int] = None,
         now: Optional[datetime] = None,
     ) -> Dict[str, Any]:
@@ -1458,6 +1567,7 @@ class PhotoSendService:
                 session=session,
                 chat_id=chat_key,
                 user_id=user_id,
+                persona_id=persona_id,
                 now=now,
                 enforce_cooldown=True,
                 verify_disk=True,
@@ -1480,6 +1590,7 @@ class PhotoSendService:
                 current_hour=current_hour,
                 reason=decision.reason or "ai_contextual",
                 user_id=user_id,
+                persona_id=persona_id,
                 now=now,
                 enforce_cooldown=True,
                 require_disk_file=True,
@@ -1500,6 +1611,7 @@ class PhotoSendService:
                 now=now,
                 allow_existing_reservation=True,
                 enforce_cooldown=True,
+                persona_id=persona_id,
             )
             if not gate_ok:
                 await PhotoUsageRepository.release_reservation(session, chat_key, photo.photo_id)

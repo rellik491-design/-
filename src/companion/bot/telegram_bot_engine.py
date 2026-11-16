@@ -984,7 +984,12 @@ class TelegramBotEngine:
             ]
         }
 
-    def format_legend_card(self, persona: Persona, account: Optional[AccountSession] = None) -> str:
+    def format_legend_card(
+        self,
+        persona: Persona,
+        account: Optional[AccountSession] = None,
+        photo_count: Optional[int] = None,
+    ) -> str:
         name = persona.name or "Алина"
         age = persona.age or 22
         city = persona.city or "Москва"
@@ -1008,6 +1013,12 @@ class TelegramBotEngine:
         else:
             acc_badge = "⭐ <b>Привязанный аккаунт:</b> Общий шаблон по умолчанию\n\n"
 
+        photo_line = (
+            f"• <b>Фотографии:</b> 📸 {photo_count} шт. (привязаны к модели)\n"
+            if photo_count is not None
+            else ""
+        )
+
         return (
             f"👤 <b>АНКЕТА И ЛЕГЕНДА ДЕВУШКИ</b>\n\n"
             f"{acc_badge}"
@@ -1022,15 +1033,26 @@ class TelegramBotEngine:
             f"• <b>Учеба / Работа и хобби:</b> <i>{study_hobbies}</i>\n"
             f"• <b>Детали и предпочтения:</b> <i>{extra}</i>\n"
             f"• <b>Режим сна:</b> 🌙 {sleep_start} – {sleep_end}\n"
-            f"• <b>Стиль общения:</b> {style_title}\n\n"
+            f"• <b>Стиль общения:</b> {style_title}\n"
+            f"{photo_line}\n"
             f"<i>Вы можете отредактировать любой пункт отдельно или нажать кнопку ниже, чтобы нейросеть заполнила всю анкету из одного вашего сообщения!</i>"
         )
 
     def build_legend_keyboard(
-        self, account_id: Optional[int] = None, has_multiple_accounts: bool = False
+        self,
+        account_id: Optional[int] = None,
+        has_multiple_accounts: bool = False,
+        photo_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         suffix = f"_{account_id}" if account_id is not None else ""
         style_cb = f"style_acc_{account_id}" if account_id is not None else "menu_styles"
+        acc_code = str(account_id) if account_id is not None else "default"
+
+        photo_btn_label = (
+            f"📸 Фотографии модели ({photo_count} шт.)"
+            if photo_count is not None
+            else "📸 Фотографии модели"
+        )
 
         rows = [
             [
@@ -1055,6 +1077,9 @@ class TelegramBotEngine:
             ],
             [
                 {"text": "⚡️ Заполнить легенду одним сообщением (AI)", "callback_data": f"legend_wizard_auto{suffix}"},
+            ],
+            [
+                {"text": photo_btn_label, "callback_data": f"photos_acc_{acc_code}"},
             ],
         ]
 
@@ -1097,6 +1122,9 @@ class TelegramBotEngine:
             rows.append([
                 {"text": f"⚙️ Легенда {acc_title}", "callback_data": f"legend_acc_{acc.id}"},
                 {"text": f"🎭 Стиль {acc_title}", "callback_data": f"style_acc_{acc.id}"},
+            ])
+            rows.append([
+                {"text": f"📸 Фото {acc_title}", "callback_data": f"photos_acc_{acc.id}"},
             ])
             if acc.is_active and acc.status == AccountStatus.CONNECTED:
                 rows.append([
@@ -1713,8 +1741,43 @@ class TelegramBotEngine:
         elif clean_cap:
             description = clean_cap
 
+        upload_state = self._user_input_states.get(user_id, "")
+        target_acc_code: Optional[str] = None
+        target_persona_id: Optional[int] = None
+        model_title: Optional[str] = None
+
         async with async_session_maker() as session:
             db_user = await self.get_or_create_user(session, message.get("from", {}))
+            accounts = await AccountService.get_user_accounts(session, db_user.id)
+
+            if upload_state.startswith("photo_upload_acc:"):
+                acc_code = upload_state.split(":", 1)[1]
+                target_acc_code = acc_code
+                if acc_code in ("default", "0"):
+                    stmt = select(Persona).where(Persona.user_id == db_user.id).order_by(Persona.id.asc())
+                    res = await session.execute(stmt)
+                    p = res.scalars().first()
+                    if not p:
+                        p = Persona(user_id=db_user.id)
+                        session.add(p)
+                        await session.commit()
+                        await session.refresh(p)
+                    target_persona_id = p.id
+                    model_title = p.name or "Общий шаблон"
+                elif acc_code.isdigit():
+                    acc_id = int(acc_code)
+                    acc = next((a for a in accounts if a.id == acc_id), None)
+                    if acc:
+                        p = await AccountService.ensure_account_persona(session, acc)
+                        target_persona_id = p.id
+                        model_title = acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")
+            elif len(accounts) == 1:
+                acc = accounts[0]
+                p = await AccountService.ensure_account_persona(session, acc)
+                target_persona_id = p.id
+                target_acc_code = str(acc.id)
+                model_title = acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")
+
             try:
                 photo, is_new = await PhotoPoolService.add_photo(
                     session=session,
@@ -1724,40 +1787,80 @@ class TelegramBotEngine:
                     tags=tags,
                     description=description,
                     user_id=db_user.id,
+                    persona_id=target_persona_id,
                     telegram_file_id=file_id,
                 )
             except Exception as e:
                 await self.send_message(chat_id, f"❌ Ошибка добавления фото: {e}")
                 return
 
-            if is_new:
-                kb = {
-                    "inline_keyboard": [
-                        [{"text": "📋 Все фото пула", "callback_data": "photos_list_0"}],
-                        [{"text": "◀️ В меню", "callback_data": "menu_main"}],
-                    ]
-                }
-                msg = (
-                    "✅ <b>Фото успешно добавлено в Photo Pool!</b>\n\n"
-                    f"🆔 <b>ID:</b> <code>{photo.photo_id}</code>\n"
-                    f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
-                    f"🏷 <b>Теги:</b> {', '.join(photo.get_tags()) or '—'}\n"
-                    f"📝 <b>Описание:</b> {photo.description or '—'}\n"
-                    f"💾 <b>Размер:</b> {photo.file_size // 1024} КБ\n"
-                    f"📊 <b>dHash:</b> <code>{photo.perceptual_hash or '—'}</code>\n"
-                    f"🔒 <b>SHA-256:</b> <code>{photo.file_hash[:16]}...</code>\n\n"
-                    "<i>Фото готово к контекстной отправке и защищено правилом No-Repeat.</i>"
-                )
-                await self.send_message(chat_id, msg, reply_markup=kb, parse_mode="HTML")
+            if target_persona_id is not None and target_acc_code is not None:
+                stats = await PhotoPoolService.get_persona_photo_stats(session, target_persona_id)
+                total_photos = stats.get("total_photos", 0)
+                if is_new:
+                    kb = {
+                        "inline_keyboard": [
+                            [{"text": "➕ Загрузить ещё фото", "callback_data": f"photo_up_acc_{target_acc_code}"}],
+                            [{"text": f"📋 Фотографии модели ({total_photos} шт.)", "callback_data": f"photo_list_acc_{target_acc_code}_0"}],
+                            [{"text": "◀️ К анкете модели", "callback_data": f"legend_acc_{target_acc_code}"}],
+                        ]
+                    }
+                    msg = (
+                        f"✅ <b>Фото успешно добавлено для модели {model_title}!</b>\n\n"
+                        f"🆔 <b>ID фото:</b> <code>{photo.photo_id}</code>\n"
+                        f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
+                        f"🏷 <b>Теги:</b> {', '.join(photo.get_tags()) or '—'}\n"
+                        f"📝 <b>Описание:</b> {photo.description or '—'}\n"
+                        f"📊 <b>Всего фото у модели:</b> {total_photos} шт.\n"
+                        f"🔒 <b>SHA-256:</b> <code>{photo.file_hash[:16]}...</code>\n\n"
+                        f"<i>Вы можете отправить следующее фото прямо сейчас (или сразу пачкой) — бот свяжет его с этой же анкетой.</i>"
+                    )
+                    await self.send_message(chat_id, msg, reply_markup=kb, parse_mode="HTML")
+                else:
+                    kb = {
+                        "inline_keyboard": [
+                            [{"text": "➕ Загрузить другое фото", "callback_data": f"photo_up_acc_{target_acc_code}"}],
+                            [{"text": f"📋 Фотографии модели ({total_photos} шт.)", "callback_data": f"photo_list_acc_{target_acc_code}_0"}],
+                            [{"text": "◀️ К анкете модели", "callback_data": f"legend_acc_{target_acc_code}"}],
+                        ]
+                    }
+                    msg = (
+                        f"⚠️ <b>Это фото уже есть у модели {model_title}!</b>\n\n"
+                        f"🆔 <b>Существующий ID:</b> <code>{photo.photo_id}</code>\n"
+                        f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
+                        f"🕒 <b>Загружено ранее:</b> {photo.created_at.strftime('%Y-%m-%d %H:%M') if photo.created_at else '—'}\n\n"
+                        f"<i>Дубликаты исключены, чтобы не отправлять собеседникам одинаковые фото.</i>"
+                    )
+                    await self.send_message(chat_id, msg, reply_markup=kb, parse_mode="HTML")
             else:
-                msg = (
-                    "⚠️ <b>Дубликат обнаружен!</b>\n\n"
-                    f"Это фото уже есть в пуле (совпадение по хэшу).\n"
-                    f"🆔 <b>Существующий ID:</b> <code>{photo.photo_id}</code>\n"
-                    f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
-                    f"🕒 <b>Загружено:</b> {photo.created_at.strftime('%Y-%m-%d %H:%M') if photo.created_at else '—'}"
-                )
-                await self.send_message(chat_id, msg, parse_mode="HTML")
+                if is_new:
+                    kb = {
+                        "inline_keyboard": [
+                            [{"text": "📋 Все фото пула", "callback_data": "photos_list_0"}],
+                            [{"text": "◀️ В меню", "callback_data": "menu_main"}],
+                        ]
+                    }
+                    msg = (
+                        "✅ <b>Фото успешно добавлено в общий пул!</b>\n\n"
+                        f"🆔 <b>ID:</b> <code>{photo.photo_id}</code>\n"
+                        f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
+                        f"🏷 <b>Теги:</b> {', '.join(photo.get_tags()) or '—'}\n"
+                        f"📝 <b>Описание:</b> {photo.description or '—'}\n"
+                        f"💾 <b>Размер:</b> {photo.file_size // 1024} КБ\n"
+                        f"📊 <b>dHash:</b> <code>{photo.perceptual_hash or '—'}</code>\n"
+                        f"🔒 <b>SHA-256:</b> <code>{photo.file_hash[:16]}...</code>\n\n"
+                        "<i>Фото готово к контекстной отправке и защищено правилом No-Repeat.</i>"
+                    )
+                    await self.send_message(chat_id, msg, reply_markup=kb, parse_mode="HTML")
+                else:
+                    msg = (
+                        "⚠️ <b>Дубликат обнаружен!</b>\n\n"
+                        f"Это фото уже есть в пуле (совпадение по хэшу).\n"
+                        f"🆔 <b>Существующий ID:</b> <code>{photo.photo_id}</code>\n"
+                        f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
+                        f"🕒 <b>Загружено:</b> {photo.created_at.strftime('%Y-%m-%d %H:%M') if photo.created_at else '—'}"
+                    )
+                    await self.send_message(chat_id, msg, parse_mode="HTML")
 
     async def handle_message(self, message: Dict[str, Any]):
         user_tg = message.get("from", {})
@@ -1945,12 +2048,29 @@ class TelegramBotEngine:
                     state_raw = self._user_input_states.pop(user_id)
                     mgr_state.clear_flow()
                     target_acc_id = None
+                    acc_part = ""
                     if ":" in state_raw:
                         state, acc_part = state_raw.split(":", 1)
                         if acc_part.isdigit():
                             target_acc_id = int(acc_part)
                     else:
                         state = state_raw
+
+                    if state == "photo_upload_acc":
+                        self._user_input_states[user_id] = state_raw
+                        acc_target = acc_part if acc_part else "default"
+                        await self.send_message(
+                            chat_id,
+                            "📸 <b>Ожидается фотография девушки!</b>\n\n"
+                            "Пожалуйста, отправьте фото (изображение) в чат.\n"
+                            "Вы можете добавить к фото подпись или описание при отправке.\n\n"
+                            "Для возврата к меню фото нажмите кнопку ниже:",
+                            reply_markup={"inline_keyboard": [
+                                [{"text": "◀️ Отмена / Назад", "callback_data": f"photos_acc_{acc_target}"}]
+                            ]},
+                            parse_mode="HTML",
+                        )
+                        return
 
                     # Handle non-persona input states first
                     if state == "WAIT_CUSTOM_VOICE_TEXT":
@@ -2686,10 +2806,13 @@ class TelegramBotEngine:
                 elif len(accounts) == 1:
                     acc = accounts[0]
                     persona = await AccountService.ensure_account_persona(session, acc)
+                    from companion.services.photo_pool_service import PhotoPoolService
+                    p_stats = await PhotoPoolService.get_persona_photo_stats(session, persona.id)
+                    p_count = p_stats.get("total_photos", 0)
                     await self.send_message(
                         chat_id,
-                        self.format_legend_card(persona, account=acc),
-                        reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=False),
+                        self.format_legend_card(persona, account=acc, photo_count=p_count),
+                        reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=False, photo_count=p_count),
                         parse_mode="HTML",
                     )
                     return
@@ -2702,10 +2825,13 @@ class TelegramBotEngine:
                         session.add(persona)
                         await session.commit()
                         await session.refresh(persona)
+                    from companion.services.photo_pool_service import PhotoPoolService
+                    p_stats = await PhotoPoolService.get_persona_photo_stats(session, persona.id)
+                    p_count = p_stats.get("total_photos", 0)
                     await self.send_message(
                         chat_id,
-                        self.format_legend_card(persona, account=None),
-                        reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=False),
+                        self.format_legend_card(persona, account=None, photo_count=p_count),
+                        reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=False, photo_count=p_count),
                         parse_mode="HTML",
                     )
                     return
@@ -3379,7 +3505,7 @@ class TelegramBotEngine:
                 return
 
             # Photo Pool Callbacks (Owner/Admin only)
-            if data.startswith("photos_"):
+            if data.startswith("photos_") or data.startswith("photo_"):
                 if not is_admin:
                     await self.answer_callback_query(cq_id, "⛔ Доступ только для владельца")
                     return
@@ -3500,6 +3626,287 @@ class TelegramBotEngine:
                 await self.edit_message(chat_id, msg_id, help_upload, reply_markup=kb, parse_mode="HTML")
                 return
 
+            if data.startswith("photos_acc_"):
+                self._user_input_states.pop(user_tg_id, None)
+                await self.answer_callback_query(cq_id)
+                acc_code = data.replace("photos_acc_", "")
+                from companion.services.photo_pool_service import PhotoPoolService
+
+                if acc_code in ("default", "0"):
+                    stmt = select(Persona).where(Persona.user_id == db_user_id).order_by(Persona.id.asc())
+                    res = await session.execute(stmt)
+                    persona = res.scalars().first()
+                    if not persona:
+                        persona = Persona(user_id=db_user_id)
+                        session.add(persona)
+                        await session.commit()
+                        await session.refresh(persona)
+                    model_name = persona.name or "Общий шаблон"
+                    acc_title = "⭐ Общий шаблон по умолчанию"
+                    target_persona_id = persona.id
+                    back_cb = "legend_acc_default"
+                else:
+                    acc_id = int(acc_code)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    res_acc = await session.execute(stmt_acc)
+                    acc = res_acc.scalars().first()
+                    if not acc:
+                        await self.answer_callback_query(cq_id, "Аккаунт не найден", show_alert=True)
+                        return
+                    persona = await AccountService.ensure_account_persona(session, acc)
+                    model_name = persona.name or acc.first_name or "Девушка"
+                    acc_title = acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")
+                    target_persona_id = persona.id
+                    back_cb = f"legend_acc_{acc.id}"
+
+                stats = await PhotoPoolService.get_persona_photo_stats(session, target_persona_id)
+                total = stats.get("total_photos", 0)
+                active = stats.get("active_photos", 0)
+                disabled = stats.get("disabled_photos", 0)
+                cats = stats.get("categories", {})
+                cats_str = ", ".join([f"{k} ({v})" for k, v in cats.items()]) if cats else "пока нет"
+
+                card_text = (
+                    f"📸 <b>ФОТОГРАФИИ МОДЕЛИ: {acc_title}</b>\n\n"
+                    f"👤 <b>Анкета:</b> {model_name}, {persona.age or 22} лет\n"
+                    f"📍 <b>Локация:</b> {persona.city or 'Москва'}\n\n"
+                    f"📊 <b>Статус галереи:</b>\n"
+                    f"• Всего загружено: <b>{total}</b> шт.\n"
+                    f"• Готовы к отправке: <b>{active}</b> 🟢\n"
+                    f"• Отключено: <b>{disabled}</b> ⚪\n"
+                    f"• Категории: <code>{cats_str}</code>\n\n"
+                    f"🔒 <i>Все фото в этой секции привязаны строго к анкете {model_name}!\n"
+                    f"ИИ отправляет их собеседникам от имени этой модели с защитой от повторов (12 часов кулдаун на каждый чат).</i>\n\n"
+                    f"Выберите действие кнопками ниже:"
+                )
+
+                kb_rows = [
+                    [{"text": "➕ Загрузить фото для модели", "callback_data": f"photo_up_acc_{acc_code}"}],
+                ]
+                if total > 0:
+                    kb_rows.append([
+                        {"text": f"📋 Список фото ({total} шт.)", "callback_data": f"photo_list_acc_{acc_code}_0"}
+                    ])
+                    kb_rows.append([
+                        {"text": "🧹 Очистить все фото модели", "callback_data": f"photo_clr_acc_{acc_code}"}
+                    ])
+                kb_rows.append([{"text": "◀️ Назад к анкете модели", "callback_data": back_cb}])
+
+                await self.edit_message(chat_id, msg_id, card_text, reply_markup={"inline_keyboard": kb_rows}, parse_mode="HTML")
+                return
+
+            if data.startswith("photo_up_acc_"):
+                await self.answer_callback_query(cq_id)
+                acc_code = data.replace("photo_up_acc_", "")
+                self._user_input_states[user_tg_id] = f"photo_upload_acc:{acc_code}"
+
+                if acc_code in ("default", "0"):
+                    model_title = "Общий шаблон"
+                else:
+                    acc_id = int(acc_code)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    res_acc = await session.execute(stmt_acc)
+                    acc = res_acc.scalars().first()
+                    model_title = (acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")) if acc else "Девушка"
+
+                text = (
+                    f"📸 <b>Режим загрузки фото для модели {model_title}</b>\n\n"
+                    f"Просто пришлите сюда в чат фотографию (можно сразу пачкой или по одной)!\n\n"
+                    f"💡 <b>Удобно:</b>\n"
+                    f"• Не нужно вводить никаких команд.\n"
+                    f"• Можно отправить фото <b>с подписью</b> (например: <code>селфи дома</code> или <code>кофе</code>).\n"
+                    f"• Или отправьте фото <b>без подписи</b> — оно автоматически сохранится в категорию <code>casual</code>.\n"
+                    f"• Все фото автоматически привяжутся к анкете <b>{model_title}</b>."
+                )
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "◀️ Назад к фото модели", "callback_data": f"photos_acc_{acc_code}"}],
+                    ]
+                }
+                await self.edit_message(chat_id, msg_id, text, reply_markup=kb, parse_mode="HTML")
+                return
+
+            if data.startswith("photo_list_acc_"):
+                tail = data[len("photo_list_acc_"):]
+                parts = tail.rsplit("_", 1)
+                acc_code = parts[0]
+                page = int(parts[1]) if (len(parts) > 1 and parts[1].isdigit()) else 0
+
+                from companion.services.photo_pool_service import PhotoPoolService
+
+                if acc_code in ("default", "0"):
+                    stmt = select(Persona).where(Persona.user_id == db_user_id).order_by(Persona.id.asc())
+                    res = await session.execute(stmt)
+                    persona = res.scalars().first()
+                    model_title = "Общий шаблон"
+                    target_persona_id = persona.id if persona else None
+                else:
+                    acc_id = int(acc_code)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    res_acc = await session.execute(stmt_acc)
+                    acc = res_acc.scalars().first()
+                    if not acc:
+                        await self.answer_callback_query(cq_id, "Аккаунт не найден", show_alert=True)
+                        return
+                    persona = await AccountService.ensure_account_persona(session, acc)
+                    model_title = acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")
+                    target_persona_id = persona.id
+
+                limit = 5
+                offset = page * limit
+                photos = await PhotoPoolService.list_photos(session, persona_id=target_persona_id, limit=limit, offset=offset)
+                stats = await PhotoPoolService.get_persona_photo_stats(session, target_persona_id)
+                total = stats.get("total_photos", 0)
+
+                if not photos:
+                    text_p = (
+                        f"📸 <b>У модели {model_title} пока нет фотографий.</b>\n\n"
+                        f"Нажмите кнопку <b>«➕ Загрузить фото»</b> ниже или просто пришлите фото в чат!"
+                    )
+                    kb = {
+                        "inline_keyboard": [
+                            [{"text": "➕ Загрузить фото", "callback_data": f"photo_up_acc_{acc_code}"}],
+                            [{"text": "◀️ Назад к фото модели", "callback_data": f"photos_acc_{acc_code}"}],
+                        ]
+                    }
+                else:
+                    total_pages = max(1, (total + limit - 1) // limit)
+                    text_p = (
+                        f"📸 <b>ФОТОГРАФИИ МОДЕЛИ: {model_title}</b>\n"
+                        f"<i>Страница {page + 1} из {total_pages} (Всего: {total} фото)</i>\n\n"
+                    )
+                    kb_rows = []
+                    for idx, p in enumerate(photos, start=offset + 1):
+                        st_emoji = "🟢" if p.enabled else "⚪"
+                        st_text = "Активно" if p.enabled else "Отключено"
+                        tags_str = ", ".join(p.get_tags()) or "нет"
+                        desc_str = p.description or "Без описания"
+                        text_p += (
+                            f"{st_emoji} <b>Фото #{idx}:</b> <code>{p.photo_id}</code> [{p.category}]\n"
+                            f"   📝 {desc_str}\n"
+                            f"   🏷 Теги: {tags_str} | Статус: {st_text} | Отправок: {p.times_used}\n\n"
+                        )
+                        btn_toggle = f"{'⏸ Выкл' if p.enabled else '▶️ Вкл'} #{idx}"
+                        kb_rows.append([
+                            {"text": btn_toggle, "callback_data": f"photo_tog_acc_{p.photo_id}_{acc_code}_{page}"},
+                            {"text": f"🗑 Удалить #{idx}", "callback_data": f"photo_del_acc_{p.photo_id}_{acc_code}_{page}"},
+                        ])
+
+                    nav_row = []
+                    if page > 0:
+                        nav_row.append({"text": "⬅️ Назад", "callback_data": f"photo_list_acc_{acc_code}_{page - 1}"})
+                    if offset + limit < total:
+                        nav_row.append({"text": "Вперед ➡️", "callback_data": f"photo_list_acc_{acc_code}_{page + 1}"})
+                    if nav_row:
+                        kb_rows.append(nav_row)
+
+                    kb_rows.append([{"text": "➕ Загрузить ещё фото", "callback_data": f"photo_up_acc_{acc_code}"}])
+                    kb_rows.append([{"text": "◀️ Назад к фото модели", "callback_data": f"photos_acc_{acc_code}"}])
+                    kb = {"inline_keyboard": kb_rows}
+
+                await self.answer_callback_query(cq_id)
+                await self.edit_message(chat_id, msg_id, text_p, reply_markup=kb, parse_mode="HTML")
+                return
+
+            if data.startswith("photo_tog_acc_"):
+                tail = data[len("photo_tog_acc_"):]
+                parts = tail.split("_")
+                page = int(parts[-1]) if parts[-1].isdigit() else 0
+                acc_code = parts[-2]
+                pid = "_".join(parts[:-2])
+                from companion.services.photo_pool_service import PhotoPoolService
+                curr = await PhotoPoolService.get_photo(session, pid)
+                if curr:
+                    new_st = not curr.enabled
+                    await PhotoPoolService.toggle_photo_status(session, pid, new_st)
+                    await self.answer_callback_query(cq_id, f"Статус: {'Включено' if new_st else 'Отключено'}")
+                else:
+                    await self.answer_callback_query(cq_id, "Фото не найдено")
+                cq["data"] = f"photo_list_acc_{acc_code}_{page}"
+                await self.handle_callback(cq)
+                return
+
+            if data.startswith("photo_del_acc_"):
+                tail = data[len("photo_del_acc_"):]
+                parts = tail.split("_")
+                page = int(parts[-1]) if parts[-1].isdigit() else 0
+                acc_code = parts[-2]
+                pid = "_".join(parts[:-2])
+                from companion.services.photo_pool_service import PhotoPoolService
+                await PhotoPoolService.delete_photo(session, pid, delete_file=True)
+                await self.answer_callback_query(cq_id, f"Фото {pid} удалено")
+                cq["data"] = f"photo_list_acc_{acc_code}_{page}"
+                await self.handle_callback(cq)
+                return
+
+            if data.startswith("photo_clr_acc_"):
+                await self.answer_callback_query(cq_id)
+                acc_code = data.replace("photo_clr_acc_", "")
+
+                if acc_code in ("default", "0"):
+                    model_title = "Общий шаблон"
+                else:
+                    acc_id = int(acc_code)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    res_acc = await session.execute(stmt_acc)
+                    acc = res_acc.scalars().first()
+                    model_title = (acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")) if acc else "Девушка"
+
+                text = (
+                    f"⚠️ <b>ОЧИСТКА ВСЕХ ФОТО МОДЕЛИ: {model_title}</b>\n\n"
+                    f"Вы действительно хотите безвозвратно удалить <b>ВСЕ</b> загруженные фотографии этой модели из базы и с диска?\n\n"
+                    f"<i>Это действие нельзя отменить.</i>"
+                )
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "🗑 Да, удалить все фото модели", "callback_data": f"photo_clr_cfm_{acc_code}"}],
+                        [{"text": "◀️ Отмена", "callback_data": f"photos_acc_{acc_code}"}],
+                    ]
+                }
+                await self.edit_message(chat_id, msg_id, text, reply_markup=kb, parse_mode="HTML")
+                return
+
+            if data.startswith("photo_clr_cfm_"):
+                acc_code = data.replace("photo_clr_cfm_", "")
+                from companion.services.photo_pool_service import PhotoPoolService
+
+                if acc_code in ("default", "0"):
+                    stmt = select(Persona).where(Persona.user_id == db_user_id).order_by(Persona.id.asc())
+                    res = await session.execute(stmt)
+                    persona = res.scalars().first()
+                    model_title = "Общий шаблон"
+                    target_persona_id = persona.id if persona else None
+                else:
+                    acc_id = int(acc_code)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    res_acc = await session.execute(stmt_acc)
+                    acc = res_acc.scalars().first()
+                    if not acc:
+                        await self.answer_callback_query(cq_id, "Аккаунт не найден", show_alert=True)
+                        return
+                    persona = await AccountService.ensure_account_persona(session, acc)
+                    model_title = acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")
+                    target_persona_id = persona.id
+
+                del_count = 0
+                if target_persona_id is not None:
+                    del_count = await PhotoPoolService.clear_persona_photos(session, target_persona_id, delete_files=True)
+
+                await self.answer_callback_query(cq_id, f"Удалено {del_count} фото")
+                text = (
+                    f"✅ <b>Все фотографии модели {model_title} успешно удалены!</b>\n\n"
+                    f"Удалено файлов: <b>{del_count}</b> шт."
+                )
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "➕ Загрузить новые фото", "callback_data": f"photo_up_acc_{acc_code}"}],
+                        [{"text": "◀️ Назад к анкете модели", "callback_data": f"legend_acc_{acc_code}"}],
+                    ]
+                }
+                await self.edit_message(chat_id, msg_id, text, reply_markup=kb, parse_mode="HTML")
+                return
+
+            if data == "resume_interrupted_flow":
                 resumed_raw, _ = mgr_state.resume_interrupted()
                 await self.answer_callback_query(cq_id, "▶️ Продолжаем ввод")
                 if resumed_raw:
@@ -3970,9 +4377,12 @@ class TelegramBotEngine:
                 elif len(accounts) == 1:
                     acc = accounts[0]
                     persona = await AccountService.ensure_account_persona(session, acc)
-                    text = self.format_legend_card(persona, account=acc)
+                    from companion.services.photo_pool_service import PhotoPoolService
+                    p_stats = await PhotoPoolService.get_persona_photo_stats(session, persona.id)
+                    p_count = p_stats.get("total_photos", 0)
+                    text = self.format_legend_card(persona, account=acc, photo_count=p_count)
                     await self.edit_message(
-                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=False), parse_mode="HTML"
+                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=False, photo_count=p_count), parse_mode="HTML"
                     )
                 else:
                     stmt = select(Persona).where(Persona.user_id == db_user_id).order_by(Persona.id.asc())
@@ -3982,15 +4392,20 @@ class TelegramBotEngine:
                         persona = Persona(user_id=db_user_id)
                         session.add(persona)
                         await session.commit()
-                    text = self.format_legend_card(persona, account=None)
+                    from companion.services.photo_pool_service import PhotoPoolService
+                    p_stats = await PhotoPoolService.get_persona_photo_stats(session, persona.id)
+                    p_count = p_stats.get("total_photos", 0)
+                    text = self.format_legend_card(persona, account=None, photo_count=p_count)
                     await self.edit_message(
-                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=False), parse_mode="HTML"
+                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=False, photo_count=p_count), parse_mode="HTML"
                     )
 
             elif data.startswith("legend_acc_"):
+                self._user_input_states.pop(user_tg_id, None)
                 await self.answer_callback_query(cq_id)
                 acc_code = data.replace("legend_acc_", "")
                 accounts = await AccountService.get_user_accounts(session, db_user_id)
+                from companion.services.photo_pool_service import PhotoPoolService
                 if acc_code in ("default", "0"):
                     stmt = select(Persona).where(Persona.user_id == db_user_id).order_by(Persona.id.asc())
                     res = await session.execute(stmt)
@@ -3999,9 +4414,11 @@ class TelegramBotEngine:
                         persona = Persona(user_id=db_user_id)
                         session.add(persona)
                         await session.commit()
-                    text = self.format_legend_card(persona, account=None)
+                    p_stats = await PhotoPoolService.get_persona_photo_stats(session, persona.id)
+                    p_count = p_stats.get("total_photos", 0)
+                    text = self.format_legend_card(persona, account=None, photo_count=p_count)
                     await self.edit_message(
-                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=len(accounts) > 0), parse_mode="HTML"
+                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=len(accounts) > 0, photo_count=p_count), parse_mode="HTML"
                     )
                 else:
                     acc_id = int(acc_code)
@@ -4010,9 +4427,11 @@ class TelegramBotEngine:
                     acc = res_acc.scalars().first()
                     if acc:
                         persona = await AccountService.ensure_account_persona(session, acc)
-                        text = self.format_legend_card(persona, account=acc)
+                        p_stats = await PhotoPoolService.get_persona_photo_stats(session, persona.id)
+                        p_count = p_stats.get("total_photos", 0)
+                        text = self.format_legend_card(persona, account=acc, photo_count=p_count)
                         await self.edit_message(
-                            chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=len(accounts) > 1), parse_mode="HTML"
+                            chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=len(accounts) > 1, photo_count=p_count), parse_mode="HTML"
                         )
 
             elif data.startswith("legend_edit_name_age"):

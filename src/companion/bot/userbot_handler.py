@@ -645,6 +645,7 @@ class UserbotHandler:
         chat_key = str(contact.tg_id or contact.id)
         current_hour = (now or datetime.now(timezone.utc)).hour
 
+        eff_persona_id = persona.id if persona else None
         if photo_intent.requested:
             if photo_intent.is_repeat_request:
                 # Interlocutor asks for the exact same previous photo -> Absolute no-repeat rule
@@ -659,6 +660,7 @@ class UserbotHandler:
                     session=session,
                     chat_id=chat_key,
                     user_id=user_id,
+                    persona_id=eff_persona_id,
                     now=now,
                     enforce_cooldown=True,
                 )
@@ -671,6 +673,7 @@ class UserbotHandler:
                         current_hour=current_hour,
                         reason=photo_intent.reason or "contextual_user_request",
                         user_id=user_id,
+                        persona_id=eff_persona_id,
                         now=now,
                         enforce_cooldown=True,
                         require_disk_file=True,
@@ -696,6 +699,7 @@ class UserbotHandler:
                 session=session,
                 chat_id=chat_key,
                 user_id=user_id,
+                persona_id=eff_persona_id,
                 now=now,
                 enforce_cooldown=True,
             )
@@ -711,6 +715,7 @@ class UserbotHandler:
                         current_hour=current_hour,
                         reason="spontaneous_contextual",
                         user_id=user_id,
+                        persona_id=eff_persona_id,
                         now=now,
                         enforce_cooldown=True,
                         require_disk_file=True,

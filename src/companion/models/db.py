@@ -195,4 +195,34 @@ async def init_db():
                 if "normalized_text" not in cm_cols:
                     sync_conn.exec_driver_sql("ALTER TABLE contact_messages ADD COLUMN normalized_text TEXT NULL")
 
+            # persona_photos
+            res_pp = sync_conn.exec_driver_sql("PRAGMA table_info(persona_photos)").fetchall()
+            pp_cols = [r[1] for r in res_pp]
+            if pp_cols:
+                if "original_filename" not in pp_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE persona_photos ADD COLUMN original_filename VARCHAR(256) NULL")
+                if "width" not in pp_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE persona_photos ADD COLUMN width INTEGER DEFAULT 0")
+                if "height" not in pp_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE persona_photos ADD COLUMN height INTEGER DEFAULT 0")
+
+            # chat_photo_usage
+            res_cpu = sync_conn.exec_driver_sql("PRAGMA table_info(chat_photo_usage)").fetchall()
+            cpu_cols = [r[1] for r in res_cpu]
+            if cpu_cols:
+                if "sent_at" not in cpu_cols:
+                    sync_conn.exec_driver_sql("ALTER TABLE chat_photo_usage ADD COLUMN sent_at TIMESTAMP NULL")
+
+            # photo_cooldown
+            sync_conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS photo_cooldown (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id VARCHAR(64) NOT NULL UNIQUE,
+                last_photo_sent_at TIMESTAMP NULL,
+                last_photo_id VARCHAR(64) NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
+            sync_conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_photo_cooldown_chat_id ON photo_cooldown(chat_id)")
+
         await conn.run_sync(_migrate_sqlite_columns)

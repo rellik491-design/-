@@ -1852,16 +1852,17 @@ class TelegramBotEngine:
                     )
                     return
 
-        # Admin Photo Pool Upload Interceptor
+        # Admin Photo Pool Upload Interceptor (Section 2 & 23: Owner-only photo upload)
         caption = (message.get("caption") or "").strip()
-        if is_admin and "photo" in message and (
-            caption.startswith("#photo")
-            or caption.startswith("/addphoto")
-            or caption.startswith("/photo")
-            or self._user_input_states.get(user_id) == "photo_upload"
-        ):
-            await self._handle_admin_photo_upload(message, user_id, chat_id, caption)
-            return
+        if "photo" in message:
+            from companion.services.daivinchik_service import DaivinchikService
+            is_dv = DaivinchikService.is_daivinchik_message(message)
+            if is_admin and not is_dv:
+                await self._handle_admin_photo_upload(message, user_id, chat_id, caption)
+                return
+            elif not is_admin and (caption.startswith("#photo") or caption.startswith("/addphoto") or caption.startswith("/photo")):
+                # Normal users must never execute photo-management uploads or see internal details
+                return
 
         # Multimodal Vision: process stickers, GIFs (animations), photos and reply contexts
         if not text or "photo" in message or "sticker" in message or "animation" in message or "reply_to_message" in message:
@@ -2755,24 +2756,128 @@ class TelegramBotEngine:
                 await self.send_message(chat_id, report, reply_markup=kb, parse_mode="HTML")
                 return
 
-            if text in ("/photos", "/photo_pool", "/photopool") or text.startswith("/photos"):
-                from companion.services.photo_pool_service import PhotoPoolService
+            if text in ("/photos", "/photo_pool", "/photopool") or text.startswith("/photos ") or text.startswith("/photo_"):
+                if not is_admin:
+                    # Section 22 & 29: Normal users must never execute photo-management commands or see internal behavior
+                    return
+
+                from companion.services.photo_pool_service import PhotoAdminService, PhotoPoolService
+                parts = text.split(maxsplit=2)
+                cmd = parts[0].lower()
+                subcmd = parts[1].lower() if len(parts) >= 2 else "stats"
+                arg = parts[2].strip() if len(parts) >= 3 else (parts[1].strip() if cmd != "/photos" and len(parts) >= 2 else "")
+
+                # /photos list
+                if cmd == "/photos" and subcmd == "list":
+                    photos = await PhotoPoolService.list_photos(session, limit=20, offset=0)
+                    if not photos:
+                        await self.send_message(
+                            chat_id,
+                            "📸 <b>В пуле пока нет загруженных фото.</b>\n\nПросто отправьте фотографию в этот чат для добавления.",
+                            parse_mode="HTML",
+                        )
+                        return
+                    lines = ["📸 <b>СПИСОК ФОТО В ПУЛЕ:</b>\n"]
+                    for p in photos:
+                        st = "🟢" if p.enabled else "⚪"
+                        tags_str = ", ".join(p.get_tags()) or "—"
+                        lines.append(
+                            f"{st} <code>{p.photo_id}</code> [{p.category}] ({p.width}x{p.height})\n"
+                            f"   🏷 Теги: {tags_str} | Отправок: {p.times_used}"
+                        )
+                    kb = {
+                        "inline_keyboard": [
+                            [{"text": "📋 Управление списком", "callback_data": "photos_list_0"}],
+                            [{"text": "📊 Статистика пула", "callback_data": "photos_stats"}],
+                        ]
+                    }
+                    await self.send_message(chat_id, "\n".join(lines), reply_markup=kb, parse_mode="HTML")
+                    return
+
+                # /photos enable <photo_id>
+                if cmd == "/photos" and subcmd == "enable" and arg:
+                    updated = await PhotoPoolService.toggle_photo_status(session, arg, True)
+                    if not updated:
+                        await self.send_message(chat_id, f"❌ Фото <code>{arg}</code> не найдено.", parse_mode="HTML")
+                    else:
+                        await self.send_message(chat_id, f"✅ Фото <code>{arg}</code> включено (🟢 Активно).", parse_mode="HTML")
+                    return
+
+                # /photos disable <photo_id>
+                if cmd == "/photos" and subcmd == "disable" and arg:
+                    updated = await PhotoPoolService.toggle_photo_status(session, arg, False)
+                    if not updated:
+                        await self.send_message(chat_id, f"❌ Фото <code>{arg}</code> не найдено.", parse_mode="HTML")
+                    else:
+                        await self.send_message(chat_id, f"⏸ Фото <code>{arg}</code> отключено (⚪ Неактивно).", parse_mode="HTML")
+                    return
+
+                # /photos delete <photo_id> or /photo_del <photo_id>
+                if (cmd == "/photos" and subcmd in ("delete", "del", "remove") and arg) or cmd == "/photo_del":
+                    pid = arg
+                    if not pid:
+                        await self.send_message(chat_id, "Использование: <code>/photos delete &lt;photo_id&gt;</code>", parse_mode="HTML")
+                        return
+                    ok = await PhotoPoolService.delete_photo(session, pid, delete_file=True)
+                    if ok:
+                        await self.send_message(chat_id, f"🗑 Фото <code>{pid}</code> удалено из пула.", parse_mode="HTML")
+                    else:
+                        await self.send_message(chat_id, f"❌ Фото с ID <code>{pid}</code> не найдено.", parse_mode="HTML")
+                    return
+
+                # /photos clear
+                if cmd == "/photos" and subcmd == "clear":
+                    deleted_cnt = await PhotoPoolService.clear_all_photos(session, delete_files=True)
+                    await self.send_message(chat_id, f"🧹 Пул фотографий очищен (удалено фото: <b>{deleted_cnt}</b>).", parse_mode="HTML")
+                    return
+
+                # /photo_toggle <photo_id>
+                if cmd == "/photo_toggle":
+                    if not arg:
+                        await self.send_message(chat_id, "Использование: <code>/photo_toggle &lt;photo_id&gt;</code>", parse_mode="HTML")
+                        return
+                    curr = await PhotoPoolService.get_photo(session, arg)
+                    if not curr:
+                        await self.send_message(chat_id, f"❌ Фото с ID <code>{arg}</code> не найдено.", parse_mode="HTML")
+                        return
+                    new_state = not curr.enabled
+                    await PhotoPoolService.toggle_photo_status(session, arg, new_state)
+                    st_label = "🟢 Включено" if new_state else "⚪ Отключено"
+                    await self.send_message(chat_id, f"✅ Фото <code>{arg}</code> теперь: {st_label}", parse_mode="HTML")
+                    return
+
+                # /photo_info <photo_id>
+                if cmd == "/photo_info":
+                    if not arg:
+                        await self.send_message(chat_id, "Использование: <code>/photo_info &lt;photo_id&gt;</code>", parse_mode="HTML")
+                        return
+                    ph = await PhotoPoolService.get_photo(session, arg)
+                    if not ph:
+                        await self.send_message(chat_id, f"❌ Фото с ID <code>{arg}</code> не найдено.", parse_mode="HTML")
+                        return
+                    from companion.models.entities import ChatPhotoUsage
+                    u_res = await session.execute(select(ChatPhotoUsage).where(ChatPhotoUsage.photo_id == arg))
+                    usages = u_res.scalars().all()
+                    chats_list = ", ".join([f"{u.chat_id} ({u.status})" for u in usages]) or "еще ни разу не отправлялось"
+                    msg = (
+                        f"📷 <b>ИНФОРМАЦИЯ О ФОТО:</b> <code>{ph.photo_id}</code>\n\n"
+                        f"📁 <b>Категория:</b> <code>{ph.category}</code>\n"
+                        f"🏷 <b>Теги:</b> {', '.join(ph.get_tags()) or '—'}\n"
+                        f"📝 <b>Описание:</b> {ph.description or '—'}\n"
+                        f"🟢 <b>Статус:</b> {'Активно' if ph.enabled else 'Отключено'}\n"
+                        f"📐 <b>Разрешение:</b> {ph.width}x{ph.height}\n"
+                        f"📤 <b>Отправок:</b> {ph.times_used}\n"
+                        f"💾 <b>Размер:</b> {ph.file_size // 1024} КБ\n"
+                        f"📊 <b>dHash:</b> <code>{ph.perceptual_hash}</code>\n"
+                        f"🔒 <b>SHA-256:</b> <code>{ph.file_hash[:16]}...</code>\n\n"
+                        f"👥 <b>Использовано в чатах:</b>\n{chats_list}"
+                    )
+                    await self.send_message(chat_id, msg, parse_mode="HTML")
+                    return
+
+                # Default: /photos or /photos stats
                 stats = await PhotoPoolService.get_pool_stats(session)
-                cats_str = "\n".join([f"  • {c}: {cnt}" for c, cnt in stats["categories"].items()]) or "  • <i>(пусто)</i>"
-                report = (
-                    "📸 <b>PERSISTENT PHOTO POOL — СТАТИСТИКА</b>\n\n"
-                    f"🖼 Всего фото: <b>{stats['total_photos']}</b>\n"
-                    f"🟢 Активных: <b>{stats['enabled_photos']}</b>\n"
-                    f"⚪ Отключенных: <b>{stats['disabled_photos']}</b>\n"
-                    f"📤 Отправок всего: <b>{stats['total_sent_events']}</b>\n"
-                    f"👥 Уникальных чатов: <b>{stats['distinct_chats_reached']}</b>\n\n"
-                    f"<b>Категории в пуле:</b>\n{cats_str}\n\n"
-                    f"⚙️ <b>Лимиты редкости:</b>\n"
-                    f"• Cooldown: {getattr(settings, 'PHOTO_COOLDOWN_HOURS', 12)}ч\n"
-                    f"• Макс. спонтанных/день: {getattr(settings, 'MAX_SPONTANEOUS_PHOTOS_PER_DAY', 1)}\n"
-                    f"• Макс. спонтанных/неделя: {getattr(settings, 'MAX_SPONTANEOUS_PHOTOS_PER_WEEK', 4)}\n\n"
-                    "🔒 <b>Правило No-Repeat:</b> Активно (фото отправляется в чат максимум 1 раз за все время)."
-                )
+                report = PhotoAdminService.format_stats_message(stats)
                 kb = {
                     "inline_keyboard": [
                         [{"text": "📋 Список фото", "callback_data": "photos_list_0"}],
@@ -2782,69 +2887,6 @@ class TelegramBotEngine:
                     ]
                 }
                 await self.send_message(chat_id, report, reply_markup=kb, parse_mode="HTML")
-                return
-
-            if text.startswith("/photo_toggle"):
-                parts = text.split()
-                if len(parts) < 2:
-                    await self.send_message(chat_id, "Использование: <code>/photo_toggle &lt;photo_id&gt;</code>", parse_mode="HTML")
-                    return
-                pid = parts[1].strip()
-                from companion.services.photo_pool_service import PhotoPoolService
-                curr = await PhotoPoolService.get_photo(session, pid)
-                if not curr:
-                    await self.send_message(chat_id, f"❌ Фото с ID <code>{pid}</code> не найдено.", parse_mode="HTML")
-                    return
-                new_state = not curr.enabled
-                await PhotoPoolService.toggle_photo_status(session, pid, new_state)
-                st_label = "🟢 Включено" if new_state else "⚪ Отключено"
-                await self.send_message(chat_id, f"✅ Фото <code>{pid}</code> теперь: {st_label}", parse_mode="HTML")
-                return
-
-            if text.startswith("/photo_del"):
-                parts = text.split()
-                if len(parts) < 2:
-                    await self.send_message(chat_id, "Использование: <code>/photo_del &lt;photo_id&gt;</code>", parse_mode="HTML")
-                    return
-                pid = parts[1].strip()
-                from companion.services.photo_pool_service import PhotoPoolService
-                ok = await PhotoPoolService.delete_photo(session, pid, delete_file=True)
-                if ok:
-                    await self.send_message(chat_id, f"🗑 Фото <code>{pid}</code> удалено из пула.", parse_mode="HTML")
-                else:
-                    await self.send_message(chat_id, f"❌ Фото с ID <code>{pid}</code> не найдено.", parse_mode="HTML")
-                return
-
-            if text.startswith("/photo_info"):
-                parts = text.split()
-                if len(parts) < 2:
-                    await self.send_message(chat_id, "Использование: <code>/photo_info &lt;photo_id&gt;</code>", parse_mode="HTML")
-                    return
-                pid = parts[1].strip()
-                from companion.services.photo_pool_service import PhotoPoolService
-                ph = await PhotoPoolService.get_photo(session, pid)
-                if not ph:
-                    await self.send_message(chat_id, f"❌ Фото с ID <code>{pid}</code> не найдено.", parse_mode="HTML")
-                    return
-                from companion.models.entities import ChatPhotoUsage
-                u_res = await session.execute(
-                    select(ChatPhotoUsage).where(ChatPhotoUsage.photo_id == pid)
-                )
-                usages = u_res.scalars().all()
-                chats_list = ", ".join([f"{u.chat_id} ({u.status})" for u in usages]) or "еще ни разу не отправлялось"
-                msg = (
-                    f"📷 <b>ИНФОРМАЦИЯ О ФОТО:</b> <code>{ph.photo_id}</code>\n\n"
-                    f"📁 <b>Категория:</b> <code>{ph.category}</code>\n"
-                    f"🏷 <b>Теги:</b> {', '.join(ph.get_tags()) or '—'}\n"
-                    f"📝 <b>Описание:</b> {ph.description or '—'}\n"
-                    f"🟢 <b>Статус:</b> {'Активно' if ph.enabled else 'Отключено'}\n"
-                    f"📤 <b>Отправок:</b> {ph.times_used}\n"
-                    f"💾 <b>Размер:</b> {ph.file_size // 1024} КБ\n"
-                    f"📊 <b>dHash:</b> <code>{ph.perceptual_hash}</code>\n"
-                    f"🔒 <b>SHA-256:</b> <code>{ph.file_hash[:16]}...</code>\n\n"
-                    f"👥 <b>Использовано в чатах:</b>\n{chats_list}"
-                )
-                await self.send_message(chat_id, msg, parse_mode="HTML")
                 return
 
             if text == "/help":
@@ -3336,25 +3378,16 @@ class TelegramBotEngine:
                 )
                 return
 
-            # Photo Pool Callbacks
+            # Photo Pool Callbacks (Owner/Admin only)
+            if data.startswith("photos_"):
+                if not is_admin:
+                    await self.answer_callback_query(cq_id, "⛔ Доступ только для владельца")
+                    return
+
             if data in ("photos_stats", "photos_refresh"):
-                from companion.services.photo_pool_service import PhotoPoolService
+                from companion.services.photo_pool_service import PhotoAdminService, PhotoPoolService
                 stats = await PhotoPoolService.get_pool_stats(session)
-                cats_str = "\n".join([f"  • {c}: {cnt}" for c, cnt in stats["categories"].items()]) or "  • <i>(пусто)</i>"
-                report = (
-                    "📸 <b>PERSISTENT PHOTO POOL — СТАТИСТИКА</b>\n\n"
-                    f"🖼 Всего фото: <b>{stats['total_photos']}</b>\n"
-                    f"🟢 Активных: <b>{stats['enabled_photos']}</b>\n"
-                    f"⚪ Отключенных: <b>{stats['disabled_photos']}</b>\n"
-                    f"📤 Отправок всего: <b>{stats['total_sent_events']}</b>\n"
-                    f"👥 Уникальных чатов: <b>{stats['distinct_chats_reached']}</b>\n\n"
-                    f"<b>Категории в пуле:</b>\n{cats_str}\n\n"
-                    f"⚙️ <b>Лимиты редкости:</b>\n"
-                    f"• Cooldown: {getattr(settings, 'PHOTO_COOLDOWN_HOURS', 12)}ч\n"
-                    f"• Макс. спонтанных/день: {getattr(settings, 'MAX_SPONTANEOUS_PHOTOS_PER_DAY', 1)}\n"
-                    f"• Макс. спонтанных/неделя: {getattr(settings, 'MAX_SPONTANEOUS_PHOTOS_PER_WEEK', 4)}\n\n"
-                    "🔒 <b>Правило No-Repeat:</b> Активно (фото отправляется в чат максимум 1 раз за все время)."
-                )
+                report = PhotoAdminService.format_stats_message(stats)
                 kb = {
                     "inline_keyboard": [
                         [{"text": "📋 Список фото", "callback_data": "photos_list_0"}],
@@ -3419,9 +3452,9 @@ class TelegramBotEngine:
                 return
 
             if data.startswith("photos_tog_"):
-                parts = data.split("_")
-                pid = parts[2]
-                page = int(parts[3]) if len(parts) > 3 else 0
+                tail = data[len("photos_tog_"):]
+                pid, page_str = tail.rsplit("_", 1) if "_" in tail else (tail, "0")
+                page = int(page_str) if page_str.isdigit() else 0
                 from companion.services.photo_pool_service import PhotoPoolService
                 curr = await PhotoPoolService.get_photo(session, pid)
                 if curr:
@@ -3433,9 +3466,9 @@ class TelegramBotEngine:
                 return
 
             if data.startswith("photos_del_"):
-                parts = data.split("_")
-                pid = parts[2]
-                page = int(parts[3]) if len(parts) > 3 else 0
+                tail = data[len("photos_del_"):]
+                pid, page_str = tail.rsplit("_", 1) if "_" in tail else (tail, "0")
+                page = int(page_str) if page_str.isdigit() else 0
                 from companion.services.photo_pool_service import PhotoPoolService
                 await PhotoPoolService.delete_photo(session, pid, delete_file=True)
                 await self.answer_callback_query(cq_id, f"Фото {pid} удалено")

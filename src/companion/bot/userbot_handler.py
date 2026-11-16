@@ -637,8 +637,8 @@ class UserbotHandler:
                 "unread_batch": unread_batch_dicts,
             }
 
-        # 7. Check Photo Request & Contextual Photo Selection (Photo Pool)
-        from companion.services.photo_pool_service import PhotoPoolService
+        # 7. Check Photo Request & Contextual Photo Selection (Photo Subsystem)
+        from companion.services.photo_subsystem import PhotoEligibilityService, PhotoSelector
         photo_intent = IntentService.detect_photo_request(all_unread_text)
         photo_asset = None
         ai_photo_context = ""
@@ -655,26 +655,26 @@ class UserbotHandler:
                     "'второй раз не покажу)'), повторно фото НЕ отправляешь.]"
                 )
             else:
-                # Explicit user request -> reserve candidate (bypasses cooldown, strictly enforces no-repeat!)
-                photo_asset = await PhotoPoolService.select_and_reserve_photo(
+                elig = await PhotoEligibilityService.check_eligibility(
                     session=session,
                     chat_id=chat_key,
-                    preferred_category=photo_intent.preferred_category,
-                    preferred_tags=photo_intent.preferred_tags,
-                    is_explicit_request=True,
-                    current_hour=current_hour,
-                    reason=photo_intent.reason or "explicit_user_request",
                     user_id=user_id,
+                    now=now,
+                    enforce_cooldown=True,
                 )
-                if not photo_asset:
-                    # Fallback to legacy MediaService only if PhotoPool had no candidate
-                    photo_asset = await MediaService.get_photo_for_contact(
+                if elig.allowed:
+                    photo_asset = await PhotoSelector.select_and_reserve(
                         session=session,
+                        chat_id=chat_key,
+                        preferred_category=photo_intent.preferred_category,
+                        preferred_tags=photo_intent.preferred_tags,
+                        current_hour=current_hour,
+                        reason=photo_intent.reason or "contextual_user_request",
                         user_id=user_id,
-                        contact_id=contact.id,
-                        preferred_tag=photo_intent.preferred_tag,
+                        now=now,
+                        enforce_cooldown=True,
+                        require_disk_file=True,
                     )
-
                 if photo_asset:
                     p_desc = getattr(photo_asset, "description", "")
                     p_cat = getattr(photo_asset, "category", getattr(photo_asset, "tag", ""))
@@ -682,24 +682,38 @@ class UserbotHandler:
                         f"\n[ПРИМЕЧАНИЕ СИСТЕМЫ: К твоему сообщению прикрепляется твое фото (категория: {p_cat}, "
                         f"описание: '{p_desc}'). Сделай реплику живой и естественной, не пиши банально 'вот фото'.]"
                     )
+                else:
+                    # Cooldown active or no unused photos available -> natural conversational reply without photo
+                    ai_photo_context = (
+                        "\n[ПРИМЕЧАНИЕ СИСТЕМЫ: Собеседник просит фото, но сейчас отправлять фото не нужно "
+                        "(либо ты уже недавно скидывала фотку, либо сейчас неудобно фоткаться). "
+                        "Ответь легко и естественно, без технических подробностей (например: "
+                        "'я же недавно скидывала) чуть позже еще что-нибудь сфоткаю' или 'сейчас в делах вся, попозже скину)').]"
+                    )
         else:
-            # Conservative spontaneous photo evaluation (rare moments, respecting cooldowns)
-            freq_ok, _ = await PhotoPoolService.check_chat_frequency_limits(
-                session=session, chat_id=chat_key, is_explicit_request=False, now=now
+            # Conservative spontaneous photo evaluation (rare moments, strictly respecting 12h per-chat cooldown)
+            elig = await PhotoEligibilityService.check_eligibility(
+                session=session,
+                chat_id=chat_key,
+                user_id=user_id,
+                now=now,
+                enforce_cooldown=True,
             )
-            if freq_ok:
+            if elig.allowed:
                 spontaneous_triggers = [
                     r"\b(что\s+делаешь|чем\s+занята|где\s+ты|куда\s+идешь|как\s+ты|що\s+робиш|де\s+ти)\b",
                 ]
                 if any(re.search(pat, all_unread_text.lower()) for pat in spontaneous_triggers):
-                    photo_asset = await PhotoPoolService.select_and_reserve_photo(
+                    photo_asset = await PhotoSelector.select_and_reserve(
                         session=session,
                         chat_id=chat_key,
                         preferred_category=None,
-                        is_explicit_request=False,
                         current_hour=current_hour,
                         reason="spontaneous_contextual",
                         user_id=user_id,
+                        now=now,
+                        enforce_cooldown=True,
+                        require_disk_file=True,
                     )
                     if photo_asset:
                         p_desc = getattr(photo_asset, "description", "")

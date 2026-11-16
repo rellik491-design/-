@@ -650,35 +650,50 @@ class BusinessChatBot:
                     await cls.read_business_message(token, connection_id, chat_id, message_id)
 
                 # 2. Fast, responsive delivery of the planned batch response (no 15–45s unread stall after AI!)
-                # Photo Pool Delivery (Reserve-Before-Send lifecycle tracking)
+                # Photo Pool Delivery (Reserve-Before-Send + PHOTO_SEND_GATE lifecycle tracking)
                 photo_obj = res.get("photo_pool_asset") or res.get("photo_asset")
                 if photo_obj:
                     p_path = getattr(photo_obj, "storage_path", None) or getattr(photo_obj, "file_path", None) or getattr(photo_obj, "telegram_file_id", None)
                     p_id = getattr(photo_obj, "photo_id", None) or str(getattr(photo_obj, "id", ""))
-                    if p_path:
-                        await cls.send_business_chat_action(token, connection_id, chat_id, "upload_photo")
-                        if not is_mock:
-                            await asyncio.sleep(random.uniform(1.0, 2.0))
-                        sent_photo_msg_id = await cls.send_business_photo(
-                            bot_token=token,
-                            business_connection_id=connection_id,
-                            chat_id=chat_id,
-                            photo_path_or_id=p_path,
+                    if p_path and p_id:
+                        from companion.services.photo_pool_service import PHOTO_SEND_GATE, PhotoPoolService
+                        gate_ok, gate_reason = await PHOTO_SEND_GATE(
+                            session=session,
+                            chat_id=str(chat_id),
+                            photo_id=p_id,
+                            allow_existing_reservation=True,
+                            enforce_cooldown=True,
                         )
-                        from companion.services.photo_pool_service import PhotoPoolService
-                        if sent_photo_msg_id:
-                            await PhotoPoolService.mark_photo_sent(
-                                session=session,
-                                chat_id=str(chat_id),
-                                photo_id=p_id,
-                                message_id=sent_photo_msg_id,
+                        if gate_ok:
+                            await cls.send_business_chat_action(token, connection_id, chat_id, "upload_photo")
+                            if not is_mock:
+                                await asyncio.sleep(random.uniform(1.0, 2.0))
+                            sent_photo_msg_id = await cls.send_business_photo(
+                                bot_token=token,
+                                business_connection_id=connection_id,
+                                chat_id=chat_id,
+                                photo_path_or_id=p_path,
                             )
+                            if sent_photo_msg_id:
+                                await PhotoPoolService.mark_photo_sent(
+                                    session=session,
+                                    chat_id=str(chat_id),
+                                    photo_id=p_id,
+                                    message_id=sent_photo_msg_id,
+                                )
+                            else:
+                                await PhotoPoolService.mark_photo_failed(
+                                    session=session,
+                                    chat_id=str(chat_id),
+                                    photo_id=p_id,
+                                    release_reservation=True,
+                                )
                         else:
                             await PhotoPoolService.mark_photo_failed(
                                 session=session,
                                 chat_id=str(chat_id),
                                 photo_id=p_id,
-                                release_reservation=False,
+                                release_reservation=True,
                             )
 
                 if voice_tag:

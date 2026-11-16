@@ -46,9 +46,15 @@ class OutputSanitizer:
         "metadata",
     )
 
-    # Internal bracket markers: [EVENT: ...], [DEBUG: ...], [SYSTEM: ...], etc.
+    # Internal bracket markers: [EVENT: ...], [DEBUG: ...], [SYSTEM: ...], [PHOTO_ID: ...], [SEND_PHOTO], etc.
     INTERNAL_BRACKET_RE = re.compile(
-        r"\[(?:EVENT|DEBUG|SYSTEM|MEMORY|STATE|INTENT|REASON|TOOL|META|CONTEXT|INTERNAL|PROMPT|ANALYSIS|ACTION|TRIP_STATE|CITY_CONNECTION|PERSONA_LORE|MEETING_HANDOFF_REQUIRED|ACTIVITY_CATALOG|OWNER_HANDOFF)(?:\s*:[^\]]*)?\]",
+        r"\[(?:EVENT|DEBUG|SYSTEM|MEMORY|STATE|INTENT|REASON|TOOL|META|CONTEXT|INTERNAL|PROMPT|ANALYSIS|ACTION|TRIP_STATE|CITY_CONNECTION|PERSONA_LORE|MEETING_HANDOFF_REQUIRED|ACTIVITY_CATALOG|OWNER_HANDOFF|PHOTO_ID|SEND_PHOTO|PHOTO_POOL|PHOTO_ELIGIBILITY|PHOTO_COOLDOWN|PHOTO_SENT|PHOTO)(?:\s*:[^\]]*)?\]",
+        re.IGNORECASE,
+    )
+
+    # Internal photo IDs or storage paths that must never leak to users
+    INTERNAL_PHOTO_LEAK_RE = re.compile(
+        r"(?:\bph_[0-9a-f]{12}\b|\bphoto_[0-9a-f]{8,}\b|storage[/\\]photos[/\\][^\s\"'<>]+)",
         re.IGNORECASE,
     )
 
@@ -235,6 +241,15 @@ class OutputSanitizer:
         return text.strip()
 
     @classmethod
+    def strip_photo_internal_markers(cls, text: str) -> str:
+        """Strips any leaked internal photo IDs, paths, or photo subsystem tags."""
+        if not text:
+            return ""
+        text = cls.INTERNAL_BRACKET_RE.sub("", text)
+        text = cls.INTERNAL_PHOTO_LEAK_RE.sub("", text)
+        return text
+
+    @classmethod
     def sanitize_outgoing_text(cls, raw_output: Any) -> str:
         """
         Full mandatory sanitization pipeline for every outgoing conversational message.
@@ -246,6 +261,7 @@ class OutputSanitizer:
         from companion.services.url_lock_service import UrlLockService
 
         text = cls.strip_internal_blocks_and_markers(text)
+        text = cls.strip_photo_internal_markers(text)
         text = UrlLockService.sanitize_links_and_placeholders(text)
         text = cls.strip_html_xml_tags(text)
         text = cls.decode_safe_entities(text)

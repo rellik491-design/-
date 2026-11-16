@@ -687,17 +687,20 @@ class PersonaPhoto(Base):
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     persona_id: Mapped[Optional[int]] = mapped_column(ForeignKey("personas.id"), nullable=True, index=True)
     telegram_file_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
-    file_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # SHA-256
+    file_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # SHA-256 (content_hash)
     perceptual_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True, nullable=True)  # dHash
-    storage_path: Mapped[str] = mapped_column(String(512))
+    storage_path: Mapped[str] = mapped_column(String(512))  # file_path
+    original_filename: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     file_size: Mapped[int] = mapped_column(Integer, default=0)
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
     mime_type: Mapped[str] = mapped_column(String(32), default="image/jpeg")
     category: Mapped[str] = mapped_column(String(64), default="casual", index=True)
     tags: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
     mood: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
     contexts: Mapped[str] = mapped_column(Text, default="[]")  # JSON list
     description: Mapped[str] = mapped_column(Text, default="")
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)  # is_active
     times_used: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
@@ -706,6 +709,30 @@ class PersonaPhoto(Base):
     usages: Mapped[List["ChatPhotoUsage"]] = relationship(
         back_populates="photo", cascade="all, delete-orphan"
     )
+
+    @property
+    def file_path(self) -> str:
+        return self.storage_path
+
+    @file_path.setter
+    def file_path(self, val: str) -> None:
+        self.storage_path = val
+
+    @property
+    def content_hash(self) -> str:
+        return self.file_hash
+
+    @content_hash.setter
+    def content_hash(self, val: str) -> None:
+        self.file_hash = val
+
+    @property
+    def is_active(self) -> bool:
+        return self.enabled
+
+    @is_active.setter
+    def is_active(self, val: bool) -> None:
+        self.enabled = bool(val)
 
     def get_tags(self) -> List[str]:
         try:
@@ -742,17 +769,26 @@ class PersonaPhoto(Base):
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
             "photo_id": self.photo_id,
+            "file_path": self.storage_path,
+            "storage_path": self.storage_path,
             "telegram_file_id": self.telegram_file_id,
+            "content_hash": self.file_hash,
             "file_hash": self.file_hash,
             "perceptual_hash": self.perceptual_hash,
-            "storage_path": self.storage_path,
+            "original_filename": self.original_filename,
+            "mime_type": self.mime_type,
+            "width": self.width,
+            "height": self.height,
+            "file_size": self.file_size,
             "category": self.category,
             "tags": self.get_tags(),
             "mood": self.get_mood(),
             "contexts": self.get_contexts(),
             "description": self.description,
             "enabled": self.enabled,
+            "is_active": self.enabled,
             "times_used": self.times_used,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
@@ -772,8 +808,9 @@ class ChatPhotoUsage(Base):
     first_used_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     message_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="reserved", index=True)  # reserved, sent, send_failed
+    status: Mapped[str] = mapped_column(String(32), default="reserved", index=True)  # reserved, sent, send_failed, uncertain
     reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     selection_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -782,5 +819,24 @@ class ChatPhotoUsage(Base):
 
     __table_args__ = (
         UniqueConstraint("chat_id", "photo_id", name="uq_chat_photo_usage"),
+    )
+
+
+PhotoUsage = ChatPhotoUsage
+
+
+class PhotoCooldown(Base):
+    """
+    Per-chat persistent 12-hour photo cooldown table (Sections 6–9, 20, 21).
+    Strictly keyed by chat_id. Updated ONLY after confirmed successful Telegram delivery.
+    """
+    __tablename__ = "photo_cooldown"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chat_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    last_photo_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    last_photo_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
     )
 

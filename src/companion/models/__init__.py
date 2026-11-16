@@ -20,6 +20,8 @@ from companion.models.entities import (
     DaivinchikProfile,
     PersonaPhoto,
     ChatPhotoUsage,
+    PhotoUsage,
+    PhotoCooldown,
 )
 
 __all__ = [
@@ -51,4 +53,6 @@ __all__ = [
     "DaivinchikProfile",
     "PersonaPhoto",
     "ChatPhotoUsage",
+    "PhotoUsage",
+    "PhotoCooldown",
 ]

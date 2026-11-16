@@ -64,9 +64,14 @@ class Settings(BaseSettings):
 
     # Persistent Photo Pool Settings
     PHOTO_STORAGE_DIR: str = "storage/photos"
+    PHOTO_CHAT_COOLDOWN_HOURS: float = 12.0
     PHOTO_COOLDOWN_HOURS: float = 12.0
-    MAX_SPONTANEOUS_PHOTOS_PER_DAY: int = 1
-    MAX_SPONTANEOUS_PHOTOS_PER_WEEK: int = 4
+    PHOTO_MAX_FILE_SIZE_MB: int = 10
+    PHOTO_GLOBAL_HOURLY_LIMIT: Optional[int] = None
+    PHOTO_GLOBAL_DAILY_LIMIT: Optional[int] = None
+    PHOTO_SELECTION_ENABLED: bool = True
+    MAX_SPONTANEOUS_PHOTOS_PER_DAY: int = 2
+    MAX_SPONTANEOUS_PHOTOS_PER_WEEK: int = 14
 
     # Persona & Schedule Defaults
     DEFAULT_TIMEZONE: str = "Europe/Moscow"

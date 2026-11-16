@@ -112,15 +112,18 @@ async def check_elevenlabs_api():
 
 async def check_gemini_api():
     print("\n" + "=" * 65)
-    print("4. GOOGLE GEMINI AI API")
+    print("4. GOOGLE GEMINI AI API (MULTI-KEY ROTATION POOL)")
     print("=" * 65)
-    key = settings.GEMINI_API_KEY
-    if not key:
-        print("[-] GEMINI_API_KEY is not set!")
-        return
-    print(f"[+] API Key Configured: {key[:8]}...{key[-6:]} (Length: {len(key)})")
-    
     from companion.ai.gemini_client import GeminiClient
+    keys = GeminiClient.get_api_keys()
+    if not keys:
+        print("[-] No GEMINI API keys configured!")
+        return
+    print(f"[+] Total Keys in Rotation Pool: {len(keys)}")
+    for i, k in enumerate(keys, 1):
+        masked = k[:10] + "..." + k[-6:] if len(k) > 16 else k
+        print(f"    Key #{i}: {masked}")
+    
     try:
         t0 = time.perf_counter()
         reply = await GeminiClient.generate_content(

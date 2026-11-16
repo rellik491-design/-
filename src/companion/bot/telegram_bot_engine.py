@@ -1748,6 +1748,19 @@ class TelegramBotEngine:
 
         async with async_session_maker() as session:
             db_user = await self.get_or_create_user(session, message.get("from", {}))
+            is_admin = self.is_admin_user(user_id)
+            sub = await SubscriptionService.get_active_subscription(session, db_user.id)
+            has_sub = is_admin or bool(sub and sub.is_active)
+            if not has_sub:
+                await self.send_message(
+                    chat_id,
+                    "❌ <b>Доступ ограничен</b>\n\n"
+                    "Для добавления фотографий моделей требуется активная подписка. Оформите её в меню «Оплата».",
+                    reply_markup={"inline_keyboard": [[{"text": "💳 Меню оплаты", "callback_data": "menu_billing"}]]},
+                    parse_mode="HTML",
+                )
+                return
+
             accounts = await AccountService.get_user_accounts(session, db_user.id)
 
             if upload_state.startswith("photo_upload_acc:"):
@@ -1767,6 +1780,8 @@ class TelegramBotEngine:
                 elif acc_code.isdigit():
                     acc_id = int(acc_code)
                     acc = next((a for a in accounts if a.id == acc_id), None)
+                    if is_admin and not acc:
+                        acc = (await session.execute(select(AccountSession).where(AccountSession.id == acc_id))).scalars().first()
                     if acc:
                         p = await AccountService.ensure_account_persona(session, acc)
                         target_persona_id = p.id
@@ -1825,7 +1840,7 @@ class TelegramBotEngine:
                         ]
                     }
                     msg = (
-                        f"⚠️ <b>Это фото уже есть у модели {model_title}!</b>\n\n"
+                        f"⚠️ <b>Дубликат обнаружен! Это фото уже есть у модели {model_title}!</b>\n\n"
                         f"🆔 <b>Существующий ID:</b> <code>{photo.photo_id}</code>\n"
                         f"📁 <b>Категория:</b> <code>{photo.category}</code>\n"
                         f"🕒 <b>Загружено ранее:</b> {photo.created_at.strftime('%Y-%m-%d %H:%M') if photo.created_at else '—'}\n\n"
@@ -1955,17 +1970,24 @@ class TelegramBotEngine:
                     )
                     return
 
-        # Admin Photo Pool Upload Interceptor (Section 2 & 23: Owner-only photo upload)
+        # Photo Pool & Model Photo Upload Interceptor (Owner or Subscribed Users)
         caption = (message.get("caption") or "").strip()
         if "photo" in message:
             from companion.services.daivinchik_service import DaivinchikService
             is_dv = DaivinchikService.is_daivinchik_message(message)
-            if is_admin and not is_dv:
-                await self._handle_admin_photo_upload(message, user_id, chat_id, caption)
-                return
-            elif not is_admin and (caption.startswith("#photo") or caption.startswith("/addphoto") or caption.startswith("/photo")):
-                # Normal users must never execute photo-management uploads or see internal details
-                return
+            if not is_dv:
+                user_state = self._user_input_states.get(user_id, "")
+                is_upload_mode = user_state.startswith("photo_upload_acc:")
+                if is_admin or is_upload_mode:
+                    await self._handle_admin_photo_upload(message, user_id, chat_id, caption)
+                    return
+                else:
+                    async with async_session_maker() as session:
+                        db_user = await self.get_or_create_user(session, user_tg)
+                        sub = await SubscriptionService.get_active_subscription(session, db_user.id)
+                        if sub and sub.is_active:
+                            await self._handle_admin_photo_upload(message, user_id, chat_id, caption)
+                            return
 
         # Multimodal Vision: process stickers, GIFs (animations), photos and reply contexts
         if not text or "photo" in message or "sticker" in message or "animation" in message or "reply_to_message" in message:
@@ -3504,10 +3526,38 @@ class TelegramBotEngine:
                 )
                 return
 
-            # Photo Pool Callbacks (Owner/Admin only)
-            if data.startswith("photos_") or data.startswith("photo_"):
+            # Photo callbacks permission check:
+            # Model-specific photos are available to ANY user with an active subscription, as well as admins!
+            is_model_photo_cb = (
+                data.startswith("photos_acc_")
+                or data.startswith("photo_up_acc_")
+                or data.startswith("photo_list_acc_")
+                or data.startswith("photo_tog_acc_")
+                or data.startswith("photo_del_acc_")
+                or data.startswith("photo_clr_acc_")
+                or data.startswith("photo_clr_cfm_")
+            )
+            is_global_pool_cb = (
+                data in ("photos_stats", "photos_refresh", "photos_upload_help")
+                or (data.startswith("photos_list_") and not is_model_photo_cb)
+                or (data.startswith("photos_tog_") and not is_model_photo_cb)
+                or (data.startswith("photos_del_") and not is_model_photo_cb)
+            )
+
+            if is_model_photo_cb:
+                sub = await SubscriptionService.get_active_subscription(session, db_user_id)
+                has_sub = is_admin or bool(sub and sub.is_active)
+                if not has_sub:
+                    await self.answer_callback_query(
+                        cq_id,
+                        "❌ Для добавления и управления фото моделей требуется активная подписка. Оформите её в меню «Оплата».",
+                        show_alert=True,
+                    )
+                    return
+
+            elif is_global_pool_cb:
                 if not is_admin:
-                    await self.answer_callback_query(cq_id, "⛔ Доступ только для владельца")
+                    await self.answer_callback_query(cq_id, "⛔ Общий пул доступен только главному администратору")
                     return
 
             if data in ("photos_stats", "photos_refresh"):
@@ -3647,7 +3697,9 @@ class TelegramBotEngine:
                     back_cb = "legend_acc_default"
                 else:
                     acc_id = int(acc_code)
-                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id)
+                    if not is_admin:
+                        stmt_acc = stmt_acc.where(AccountSession.user_id == db_user_id)
                     res_acc = await session.execute(stmt_acc)
                     acc = res_acc.scalars().first()
                     if not acc:
@@ -3704,7 +3756,9 @@ class TelegramBotEngine:
                     model_title = "Общий шаблон"
                 else:
                     acc_id = int(acc_code)
-                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id)
+                    if not is_admin:
+                        stmt_acc = stmt_acc.where(AccountSession.user_id == db_user_id)
                     res_acc = await session.execute(stmt_acc)
                     acc = res_acc.scalars().first()
                     model_title = (acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")) if acc else "Девушка"
@@ -3742,7 +3796,9 @@ class TelegramBotEngine:
                     target_persona_id = persona.id if persona else None
                 else:
                     acc_id = int(acc_code)
-                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id)
+                    if not is_admin:
+                        stmt_acc = stmt_acc.where(AccountSession.user_id == db_user_id)
                     res_acc = await session.execute(stmt_acc)
                     acc = res_acc.scalars().first()
                     if not acc:
@@ -3847,7 +3903,9 @@ class TelegramBotEngine:
                     model_title = "Общий шаблон"
                 else:
                     acc_id = int(acc_code)
-                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id)
+                    if not is_admin:
+                        stmt_acc = stmt_acc.where(AccountSession.user_id == db_user_id)
                     res_acc = await session.execute(stmt_acc)
                     acc = res_acc.scalars().first()
                     model_title = (acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")) if acc else "Девушка"
@@ -3878,7 +3936,9 @@ class TelegramBotEngine:
                     target_persona_id = persona.id if persona else None
                 else:
                     acc_id = int(acc_code)
-                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                    stmt_acc = select(AccountSession).where(AccountSession.id == acc_id)
+                    if not is_admin:
+                        stmt_acc = stmt_acc.where(AccountSession.user_id == db_user_id)
                     res_acc = await session.execute(stmt_acc)
                     acc = res_acc.scalars().first()
                     if not acc:

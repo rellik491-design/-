@@ -393,6 +393,32 @@ class PhotoUploadManager:
         owner_id = configured_owner_id or getattr(settings, "ADMIN_TELEGRAM_ID", 0)
         return bool(owner_id and int(sender_id) == int(owner_id))
 
+    @classmethod
+    async def verify_sender_authorization(
+        cls,
+        session: AsyncSession,
+        sender_id: Optional[int],
+        configured_owner_id: Optional[int] = None,
+    ) -> bool:
+        """Verifies that sender_id is the configured owner/admin OR has an active subscription."""
+        if sender_id is None:
+            return False
+        if cls.verify_owner(sender_id, configured_owner_id):
+            return True
+        admin_ids = {8541203642, 8501711204}
+        if sender_id in admin_ids:
+            return True
+        from companion.models.entities import User
+        from companion.services.subscription_service import SubscriptionService
+        stmt = select(User).where(User.telegram_id == sender_id)
+        res = await session.execute(stmt)
+        u = res.scalars().first()
+        if u:
+            sub = await SubscriptionService.get_active_subscription(session, u.id)
+            if sub and sub.is_active:
+                return True
+        return False
+
     @staticmethod
     def compute_sha256(data: bytes) -> str:
         return hashlib.sha256(data).hexdigest()
@@ -500,7 +526,7 @@ class PhotoUploadManager:
         Store File on Persistent Disk -> Create DB Record (cleaning up file if DB fails).
         Returns: (PersonaPhoto, is_new)
         """
-        if sender_tg_id is not None and not cls.verify_owner(sender_tg_id, configured_owner_id):
+        if sender_tg_id is not None and not (await cls.verify_sender_authorization(session, sender_tg_id, configured_owner_id)):
             raise PermissionError(f"Sender {sender_tg_id} is not authorized to upload persona photos.")
 
         width, height, mime_type, clean_ext = cls.validate_image_bytes(file_bytes)

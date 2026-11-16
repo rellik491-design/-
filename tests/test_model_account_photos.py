@@ -225,3 +225,72 @@ async def test_legend_and_accounts_keyboard_markup():
     card_text = engine.format_legend_card(p, photo_count=5)
     assert "Фотографии:" in card_text
     assert "5 шт." in card_text
+
+
+@pytest.mark.asyncio
+async def test_subscriber_can_access_and_upload_photos(test_session: AsyncSession):
+    from companion.models.entities import Subscription, PlanDuration
+    from companion.services.subscription_service import SubscriptionService
+
+    # 1. Normal subscriber user (NOT admin)
+    sub_user = User(telegram_id=9273502814, username="subscriber_user")
+    test_session.add(sub_user)
+    await test_session.commit()
+    await test_session.refresh(sub_user)
+
+    # 2. Give active 31-day subscription
+    await SubscriptionService.activate_plan(test_session, sub_user.id, PlanDuration.DAYS_31)
+
+    # 3. Model account for subscriber
+    persona = Persona(user_id=sub_user.id, name="Карина", age=26, city="London")
+    test_session.add(persona)
+    await test_session.commit()
+    await test_session.refresh(persona)
+
+    acc = AccountSession(
+        user_id=sub_user.id,
+        persona_id=persona.id,
+        first_name="Карина",
+        username="karinabrit1",
+        tg_user_id=999888,
+        status=AccountStatus.CONNECTED,
+    )
+    test_session.add(acc)
+    await test_session.commit()
+
+    # 4. Verify PhotoUploadManager authorizes this subscriber
+    is_auth = await PhotoUploadManager.verify_sender_authorization(test_session, sub_user.telegram_id)
+    assert is_auth is True
+
+    # 5. Non-subscriber without sub is NOT authorized
+    non_sub = User(telegram_id=123999444, username="unpaid_user")
+    test_session.add(non_sub)
+    await test_session.commit()
+    is_non_sub_auth = await PhotoUploadManager.verify_sender_authorization(test_session, non_sub.telegram_id)
+    assert is_non_sub_auth is False
+
+    # 6. Subscriber can upload photo with sender_tg_id
+    img = create_test_image("top")
+    photo, is_new = await PhotoUploadManager.upload_photo(
+        session=test_session,
+        file_bytes=img,
+        filename="sub_photo.jpg",
+        category="selfie",
+        user_id=sub_user.id,
+        persona_id=persona.id,
+        sender_tg_id=sub_user.telegram_id,
+    )
+    assert is_new is True
+    assert photo.persona_id == persona.id
+
+    # 7. Unpaid user upload raises PermissionError
+    with pytest.raises(PermissionError):
+        await PhotoUploadManager.upload_photo(
+            session=test_session,
+            file_bytes=img,
+            filename="unpaid.jpg",
+            category="casual",
+            user_id=non_sub.id,
+            persona_id=persona.id,
+            sender_tg_id=non_sub.telegram_id,
+        )

@@ -257,3 +257,81 @@ class AdminNotifier:
             disable_notification=False,
         )
 
+    @staticmethod
+    def format_meeting_handoff_alert(
+        handoff_payload: Dict[str, Any],
+        contact_name: str = "Собеседник",
+        contact_username: Optional[str] = None,
+        conversation_context: str = "",
+    ) -> str:
+        """Formats the structured MEETING HANDOFF notification for the owner."""
+        user_id = handoff_payload.get("user_id") or handoff_payload.get("chat_id") or ""
+        username_str = f" (@{contact_username})" if contact_username else ""
+        user_ident = f"{contact_name}{username_str} [ID: {user_id}]".strip()
+
+        curr_city = handoff_payload.get("current_city") or handoff_payload.get("city") or "не указан"
+        meet_city = handoff_payload.get("meeting_city") or handoff_payload.get("city") or curr_city
+        act_type = handoff_payload.get("activity_type") or "cinema/quest"
+        venue = handoff_payload.get("venue") or "не выбрано"
+        item_name = handoff_payload.get("activity") or act_type
+        m_date = handoff_payload.get("date") or "не уточнена"
+        m_time = handoff_payload.get("time") or "не уточнено"
+        p_conn = handoff_payload.get("persona_connection") or "нет"
+        p_trip = handoff_payload.get("persona_trip") or "нет"
+        reason = handoff_payload.get("reason") or "booking/link required"
+
+        lines = [
+            "<b>MEETING HANDOFF</b>",
+            "",
+            f"User: {user_ident}",
+            f"Current city: {curr_city}",
+            f"Meeting city: {meet_city}",
+            "",
+            f"Activity: {act_type}",
+            f"Venue: {venue}",
+            f"Film/Quest: {item_name}",
+            "",
+            f"Date: {m_date}",
+            f"Time: {m_time}",
+            "",
+            f"Persona connection:\n{p_conn}",
+            "",
+            f"Persona trip:\n{p_trip}",
+            "",
+            f"Reason for handoff:\n{reason}",
+        ]
+        if conversation_context:
+            lines.extend(["", f"Conversation context:\n<i>{conversation_context}</i>"])
+        return "\n".join(lines)
+
+    @classmethod
+    async def send_meeting_handoff_alert(
+        cls,
+        owner_tg_id: int,
+        handoff_payload: Dict[str, Any],
+        contact_name: str = "Собеседник",
+        contact_username: Optional[str] = None,
+        contact_id: Optional[int] = None,
+        conversation_context: str = "",
+    ) -> bool:
+        """Sends the MEETING HANDOFF notification to the owner."""
+        text = cls.format_meeting_handoff_alert(
+            handoff_payload=handoff_payload,
+            contact_name=contact_name,
+            contact_username=contact_username,
+            conversation_context=conversation_context,
+        )
+        kb = None
+        if contact_id:
+            kb = {
+                "inline_keyboard": [
+                    [{"text": "✅ Принять лида (Управление встречей)", "callback_data": f"lead_accept_{contact_id}"}]
+                ]
+            }
+        return await cls.send_telegram_alert(
+            text=text,
+            admin_tg_id=owner_tg_id,
+            reply_markup=kb,
+            disable_notification=False,
+        )
+

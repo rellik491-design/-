@@ -42,6 +42,16 @@ class PreSendValidator:
             return False, "empty_reply", ""
 
         from companion.services.output_sanitizer import OutputSanitizer
+        from companion.services.url_lock_service import UrlLockService
+
+        if UrlLockService.contains_any_link_attempt(str(candidate_reply)):
+            mp_ctx = internal_context.get("meeting_planner")
+            if isinstance(mp_ctx, dict) and mp_ctx.get("stage", "IDLE") != "IDLE":
+                mp_ctx["handoff_required"] = True
+                mp_ctx["stage"] = "MEETING_HANDOFF_REQUIRED"
+                mp_ctx["meeting_control"] = "OWNER"
+                logger.warning("[PRESEND_VALIDATOR] Intercepted link/placeholder in meeting context -> triggering MEETING_HANDOFF_REQUIRED")
+
         text = OutputSanitizer.sanitize_outgoing_text(candidate_reply)
         if not text:
             return False, "empty_after_sanitization", ""

@@ -48,7 +48,7 @@ class OutputSanitizer:
 
     # Internal bracket markers: [EVENT: ...], [DEBUG: ...], [SYSTEM: ...], etc.
     INTERNAL_BRACKET_RE = re.compile(
-        r"\[(?:EVENT|DEBUG|SYSTEM|MEMORY|STATE|INTENT|REASON|TOOL|META|CONTEXT|INTERNAL|PROMPT|ANALYSIS|ACTION)\s*:[^\]]*\]",
+        r"\[(?:EVENT|DEBUG|SYSTEM|MEMORY|STATE|INTENT|REASON|TOOL|META|CONTEXT|INTERNAL|PROMPT|ANALYSIS|ACTION|TRIP_STATE|CITY_CONNECTION|PERSONA_LORE|MEETING_HANDOFF_REQUIRED|ACTIVITY_CATALOG|OWNER_HANDOFF)(?:\s*:[^\]]*)?\]",
         re.IGNORECASE,
     )
 
@@ -243,17 +243,26 @@ class OutputSanitizer:
         if not text:
             return ""
 
+        from companion.services.url_lock_service import UrlLockService
+
         text = cls.strip_internal_blocks_and_markers(text)
+        text = UrlLockService.sanitize_links_and_placeholders(text)
         text = cls.strip_html_xml_tags(text)
         text = cls.decode_safe_entities(text)
         text = cls.strip_markdown_leakage(text)
+        text = UrlLockService.sanitize_links_and_placeholders(text)
         text = cls.normalize_whitespace(text)
         return text
 
     @classmethod
-    def validate_final_outgoing(cls, text: Any) -> Tuple[bool, Optional[str]]:
+    def validate_final_outgoing(
+        cls,
+        text: Any,
+        approved_urls: Optional[Any] = None,
+        allowed_bot_username: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str]]:
         """
-        Final outgoing contract check (Section 16) before calling Telegram sendMessage.
+        Final outgoing contract check (Section 16 & Section 22 URL Lock) before calling Telegram sendMessage.
         Returns: (is_valid, failure_reason)
         """
         if not isinstance(text, str):
@@ -268,6 +277,15 @@ class OutputSanitizer:
 
         if cls.INTERNAL_BRACKET_RE.search(stripped):
             return False, "internal_marker_detected"
+
+        from companion.services.url_lock_service import UrlLockService
+        url_ok, url_err = UrlLockService.run_presend_assertions(
+            stripped,
+            approved_urls=approved_urls,
+            allowed_bot_username=allowed_bot_username,
+        )
+        if not url_ok:
+            return False, url_err
 
         # Check for serialized JSON object leakage
         if stripped.startswith("{") and stripped.endswith("}"):

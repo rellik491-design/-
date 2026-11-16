@@ -1137,6 +1137,7 @@ class ResponsePlanner:
             rep_target = int(failed_mid) if (failed_mid is not None and len(batch) > 1) else None
             msg_entry = {
                 "text": fallback_msg,
+                "links": [],
                 "reply_to_message_id": rep_target,
                 "send_type": "text",
                 "sticker_category": None,
@@ -1264,6 +1265,7 @@ class ResponsePlanner:
             t_dur = TypingSimulator.calculate_typing_duration(b_text, is_aggressive_burst=rhythm["is_aggressive"])
             msg_dict = {
                 "text": b_text,
+                "links": [],
                 "reply_to_message_id": rep_id,
                 "send_type": "text",
                 "typing_duration": t_dur,
@@ -1274,6 +1276,7 @@ class ResponsePlanner:
             unified_responses.append(
                 {
                     "text": b_text,
+                    "links": [],
                     "reply_to_message_id": rep_id,
                     "send_type": "text",
                     "typing_duration": t_dur,

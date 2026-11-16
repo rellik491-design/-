@@ -551,6 +551,22 @@ class BusinessChatBot:
         meetup_intent = IntentService.detect_meetup_proposal(alert_user_message)
         meetup_agreed = IntentService.detect_meetup_agreement(alert_user_message)
 
+        meeting_state = contact.get_meeting_state() if (contact and hasattr(contact, "get_meeting_state")) else {}
+        if detected_event == "MEETING_HANDOFF_REQUIRED" or meeting_state.get("stage") == "MEETING_HANDOFF_REQUIRED":
+            handoff_payload = meeting_state.get("handoff_payload")
+            if handoff_payload and not meeting_state.get("owner_notified"):
+                meeting_state["owner_notified"] = True
+                contact.set_meeting_state(meeting_state)
+                await session.commit()
+                await AdminNotifier.send_meeting_handoff_alert(
+                    owner_tg_id=owner_tg_id,
+                    handoff_payload=handoff_payload,
+                    contact_name=contact_name,
+                    contact_username=contact_username,
+                    contact_id=contact_id,
+                    conversation_context=alert_user_message,
+                )
+
         if detected_event == "QUEST_AGREED" or (meetup_agreed and getattr(contact, "funnel_stage", "") in ("date_proposed", "quest_offered", "quest_agreed")):
             if contact and not getattr(contact, "alert_quest_sent", False):
                 contact.alert_quest_sent = True

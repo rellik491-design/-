@@ -175,6 +175,8 @@ class Persona(Base):
     trip_country_code: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
     trip_timezone: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     location_extra: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    city_connections_data: Mapped[Optional[str]] = mapped_column(Text, default="[]", nullable=True)
+    activity_catalog_data: Mapped[Optional[str]] = mapped_column(Text, default="[]", nullable=True)
     legend: Mapped[str] = mapped_column(
         Text,
         default="Ты общительная, милая и немного саркастичная девушка. Учишься на дизайне и любишь кофе.",
@@ -194,6 +196,42 @@ class Persona(Base):
     def clear_temporary_trip(self):
         from companion.services.location_context_service import LocationContextService
         return LocationContextService.clear_temporary_trip(self)
+
+    def get_city_connections(self) -> list:
+        """Returns configured persona city_connections lore list."""
+        if not self.city_connections_data:
+            return []
+        try:
+            import json
+            parsed = json.loads(self.city_connections_data)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+
+    def set_city_connections(self, connections: list) -> None:
+        """Stores configured persona city_connections lore as JSON."""
+        import json
+        self.city_connections_data = json.dumps(connections or [], ensure_ascii=False)
+
+    def get_activity_catalog(self) -> list:
+        """Returns configured city-scoped activity catalog (cinema/quests)."""
+        if not self.activity_catalog_data:
+            return []
+        try:
+            import json
+            parsed = json.loads(self.activity_catalog_data)
+            if isinstance(parsed, dict):
+                return parsed.get("activities", [])
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+
+    def set_activity_catalog(self, activities: Any) -> None:
+        """Stores configured city-scoped activity catalog as JSON."""
+        import json
+        if isinstance(activities, dict) and "activities" in activities:
+            activities = activities["activities"]
+        self.activity_catalog_data = json.dumps(activities or [], ensure_ascii=False)
 
 
 class Contact(Base):
@@ -278,6 +316,8 @@ class Contact(Base):
     family_location: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     temporary_location: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     geo_profile_data: Mapped[Optional[str]] = mapped_column(Text, default="{}", nullable=True)
+    persona_lore_state: Mapped[Optional[str]] = mapped_column(Text, default="{}", nullable=True)
+    meeting_state_data: Mapped[Optional[str]] = mapped_column(Text, default="{}", nullable=True)
     active_thread: Mapped[Optional[str]] = mapped_column(String(64), default="general", nullable=True)
     correction_events: Mapped[Optional[str]] = mapped_column(Text, default="[]", nullable=True)
 
@@ -350,6 +390,42 @@ class Contact(Base):
         events = self.get_correction_events()
         events.append(correction_data)
         self.correction_events = json.dumps(events[-30:], ensure_ascii=False)
+
+    def get_persona_lore_state(self) -> dict:
+        """Returns persona lore disclosure cooldown state (separate from user memory)."""
+        if not self.persona_lore_state:
+            return {}
+        try:
+            import json
+            parsed = json.loads(self.persona_lore_state)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    def set_persona_lore_state(self, state: dict) -> None:
+        """Stores persona lore disclosure cooldown state as JSON."""
+        import json
+        self.persona_lore_state = json.dumps(state or {}, ensure_ascii=False)
+
+    def get_meeting_state(self) -> dict:
+        """Returns meeting planner & owner handoff control state."""
+        if not self.meeting_state_data:
+            return {"meeting_control": "AUTO", "stage": "IDLE"}
+        try:
+            import json
+            parsed = json.loads(self.meeting_state_data)
+            if isinstance(parsed, dict):
+                parsed.setdefault("meeting_control", "AUTO")
+                parsed.setdefault("stage", "IDLE")
+                return parsed
+            return {"meeting_control": "AUTO", "stage": "IDLE"}
+        except Exception:
+            return {"meeting_control": "AUTO", "stage": "IDLE"}
+
+    def set_meeting_state(self, state: dict) -> None:
+        """Stores meeting planner & owner handoff control state as JSON."""
+        import json
+        self.meeting_state_data = json.dumps(state or {}, ensure_ascii=False)
 
 
 class ContactMessage(Base):

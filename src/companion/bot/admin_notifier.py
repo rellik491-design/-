@@ -142,7 +142,8 @@ class AdminNotifier:
         )
         kb = {
             "inline_keyboard": [
-                [{"text": "✅ Принял лида (Остановить ИИ в этом чате)", "callback_data": f"lead_accept_{contact_id}"}]
+                [{"text": "✅ Принял лида (Остановить ИИ в этом чате)", "callback_data": f"lead_accept_{contact_id}"}],
+                [{"text": "🔕 Остановить напоминание", "callback_data": f"lead_mute_{contact_id}"}],
             ]
         }
 

@@ -271,6 +271,7 @@ class Contact(Base):
     # Anti-Spam alert flags: ensure each alert is sent at most once
     alert_date_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     alert_quest_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    quest_alarm_muted: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Dynamic conversation style preferences per contact
     no_brackets: Mapped[bool] = mapped_column(Boolean, default=False)

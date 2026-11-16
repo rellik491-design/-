@@ -67,6 +67,8 @@ async def init_db():
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN alert_date_sent BOOLEAN DEFAULT 0")
             if "alert_quest_sent" not in c_cols:
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN alert_quest_sent BOOLEAN DEFAULT 0")
+            if "quest_alarm_muted" not in c_cols:
+                sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN quest_alarm_muted BOOLEAN DEFAULT 0")
             if "no_brackets" not in c_cols:
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN no_brackets BOOLEAN DEFAULT 0")
             if "scheduled_reengage_at" not in c_cols:
@@ -141,6 +143,13 @@ async def init_db():
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN active_thread VARCHAR(64) DEFAULT 'general'")
             if "correction_events" not in c_cols:
                 sync_conn.exec_driver_sql("ALTER TABLE contacts ADD COLUMN correction_events TEXT NULL")
+
+            # Automatic status migration for quest/date leads
+            sync_conn.exec_driver_sql("""
+                UPDATE contacts 
+                SET status = 'LEAD_MEETING' 
+                WHERE (funnel_stage IN ('quest_agreed', 'date_proposed') OR alert_quest_sent = 1 OR alert_date_sent = 1 OR status = 'lead_meeting')
+            """)
 
             # processed_messages table (Sections 10-13: Idempotency & Message Ownership)
             sync_conn.exec_driver_sql("""

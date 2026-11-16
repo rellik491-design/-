@@ -44,6 +44,7 @@ logs/
 tmp/
 temp/
 scratch/
+storage/
 
 # Archives and build artifacts
 *.zip

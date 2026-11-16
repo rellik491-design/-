@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from companion.config import settings
 from companion.models.entities import AccountSession, User, Contact
-from companion.models.enums import AccountStatus
+from companion.models.enums import AccountStatus, ContactStatus
 from companion.services.invite_service import InviteService
 from companion.services.subscription_service import SubscriptionService
 from companion.services.handover_service import HandoverService
@@ -571,6 +571,11 @@ class BusinessChatBot:
             if contact and not getattr(contact, "alert_quest_sent", False):
                 contact.alert_quest_sent = True
                 contact.funnel_stage = "quest_agreed"
+                contact.status = ContactStatus.LEAD_MEETING
+                if not contact.lead_detected_at:
+                    contact.lead_detected_at = datetime.now(timezone.utc)
+                if not contact.lead_summary:
+                    contact.lead_summary = f"Согласился на квест: «{alert_user_message[:100]}»"
                 await session.commit()
                 await AdminNotifier.send_quest_agreed_alarm(
                     owner_tg_id=owner_tg_id,
@@ -584,6 +589,11 @@ class BusinessChatBot:
             if contact and not getattr(contact, "alert_date_sent", False):
                 contact.alert_date_sent = True
                 contact.funnel_stage = "date_proposed"
+                contact.status = ContactStatus.LEAD_MEETING
+                if not contact.lead_detected_at:
+                    contact.lead_detected_at = datetime.now(timezone.utc)
+                if not contact.lead_summary:
+                    contact.lead_summary = f"Предложение встречи: «{alert_user_message[:100]}»"
                 await session.commit()
                 await AdminNotifier.send_date_proposed_alert(
                     owner_tg_id=owner_tg_id,

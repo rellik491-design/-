@@ -24,7 +24,13 @@ class StatsService:
 
         total_contacts = len(all_contacts)
         active_count = sum(1 for c in all_contacts if c.status == ContactStatus.ACTIVE and not c.bot_paused)
-        leads_count = sum(1 for c in all_contacts if c.status == ContactStatus.LEAD_MEETING)
+        leads_count = sum(
+            1 for c in all_contacts
+            if c.status == ContactStatus.LEAD_MEETING
+            or getattr(c, "funnel_stage", "") in ("quest_agreed", "date_proposed", "quest_offered")
+            or getattr(c, "alert_quest_sent", False)
+            or getattr(c, "alert_date_sent", False)
+        )
         paused_count = sum(1 for c in all_contacts if c.bot_paused)
 
         total_in = sum(c.total_messages_in for c in all_contacts)
@@ -46,16 +52,32 @@ class StatsService:
     @classmethod
     async def get_leads(cls, session: AsyncSession, user_id: int) -> List[Dict[str, Any]]:
         """
-        Fetches all hot leads (contacts that proposed a meetup/date)
-        so the owner can follow up directly.
+        Fetches all hot leads (contacts that proposed a meetup/date or agreed to quest)
+        so the owner can follow up directly. Categorizes them into 'pending_reminder' and 'accepted'.
         """
+        from sqlalchemy import or_, desc
+        from companion.bot.admin_notifier import AdminNotifier
+
         stmt = (
             select(Contact)
             .where(
                 Contact.user_id == user_id,
-                Contact.status == ContactStatus.LEAD_MEETING,
+                or_(
+                    Contact.status == ContactStatus.LEAD_MEETING,
+                    Contact.funnel_stage.in_(["quest_agreed", "date_proposed", "quest_offered"]),
+                    Contact.alert_quest_sent == True,
+                    Contact.alert_date_sent == True,
+                    Contact.paused_reason.like("%quest%"),
+                    Contact.paused_reason.like("%lead%"),
+                    Contact.paused_reason.like("%owner_manual_takeover%"),
+                ),
             )
-            .order_by(Contact.lead_detected_at.desc())
+            .order_by(
+                desc(Contact.lead_detected_at.isnot(None)),
+                desc(Contact.lead_detected_at),
+                desc(Contact.last_incoming_at),
+                desc(Contact.id),
+            )
         )
         res = await session.execute(stmt)
         leads = res.scalars().all()
@@ -63,6 +85,23 @@ class StatsService:
         results = []
         for c in leads:
             tg_link = f"https://t.me/{c.username}" if c.username else f"tg://user?id={c.tg_id}"
+            is_ai = getattr(c, "ai_active", not c.bot_paused)
+            is_accepted = bool(not is_ai or c.bot_paused or (c.paused_reason and ("accepted" in c.paused_reason or "owner" in c.paused_reason)))
+            is_alarm = AdminNotifier.is_alarm_active(c.id)
+            is_muted = getattr(c, "quest_alarm_muted", False)
+
+            summary = c.lead_summary
+            if not summary:
+                if getattr(c, "funnel_stage", "") == "quest_agreed" or getattr(c, "alert_quest_sent", False):
+                    summary = "Согласился на квест 🎯"
+                elif getattr(c, "funnel_stage", "") == "date_proposed" or getattr(c, "alert_date_sent", False):
+                    summary = "Предложение встречи ☕"
+                else:
+                    summary = "Предложение встречи / квеста"
+
+            time_val = c.lead_detected_at or c.last_incoming_at
+            detected_str = time_val.strftime("%d.%m %H:%M") if time_val else None
+
             results.append({
                 "id": c.id,
                 "contact_id": c.id,
@@ -71,10 +110,14 @@ class StatsService:
                 "username": c.username,
                 "tg_link": tg_link,
                 "city": c.detected_city,
-                "detected_at": c.lead_detected_at.strftime("%Y-%m-%d %H:%M") if c.lead_detected_at else None,
-                "proposal_summary": c.lead_summary,
+                "detected_at": detected_str,
+                "proposal_summary": summary,
                 "bot_paused": c.bot_paused,
-                "ai_active": getattr(c, "ai_active", not c.bot_paused),
+                "ai_active": is_ai,
+                "is_accepted": is_accepted,
+                "is_alarm_active": is_alarm,
+                "quest_alarm_muted": is_muted,
+                "category": "accepted" if is_accepted else "pending_reminder",
             })
         return results
 

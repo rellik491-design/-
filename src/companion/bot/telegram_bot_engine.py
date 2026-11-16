@@ -1210,6 +1210,178 @@ class TelegramBotEngine:
             ]
         }
 
+    @staticmethod
+    def build_leads_view(leads: List[Dict[str, Any]], filter_mode: str = "all") -> tuple[str, Dict[str, Any]]:
+        pending = [l for l in leads if not l.get("is_accepted")]
+        accepted = [l for l in leads if l.get("is_accepted")]
+
+        total_cnt = len(leads)
+        pending_cnt = len(pending)
+        accepted_cnt = len(accepted)
+
+        if not leads:
+            text = (
+                "📭 <b>Пока нет горячих лидов на встречу.</b>\n\n"
+                "Когда собеседник согласится пойти на квест или предложит встретиться — "
+                "он мгновенно появится в этом разделе со ссылкой на его профиль в Telegram!"
+            )
+            kb = {"inline_keyboard": [[{"text": "◀️ В главное меню", "callback_data": "menu_main"}]]}
+            return text, kb
+
+        kb_rows = []
+
+        if filter_mode == "pending":
+            text = (
+                f"🔔 <b>ЛИДЫ: НА КОМ НАПОМИНАНИЕ / ОЖИДАЮТ ({pending_cnt})</b>\n"
+                f"<i>Собеседники, согласившиеся на квест или встречу, где ИИ еще ведет диалог или звенит будильник.</i>\n\n"
+            )
+            if not pending:
+                text += "<i>В этой категории сейчас пусто. Все лиды уже приняты владельцем.</i>\n"
+            else:
+                for idx, l in enumerate(pending[:8], 1):
+                    name = l["name"]
+                    link = l["tg_link"]
+                    username = f" (@{l['username']})" if l.get("username") else ""
+                    city = f" • 📍 {l['city']}" if l.get("city") else ""
+                    summary = l.get("proposal_summary") or "Согласился на квест 🎯"
+                    time_str = l.get("detected_at") or "недавно"
+
+                    if l.get("is_alarm_active"):
+                        alarm_badge = "🚨 <b>ЗВОНИТ БУДИЛЬНИК</b>"
+                    elif l.get("quest_alarm_muted"):
+                        alarm_badge = "🔕 <i>Напоминание выкл.</i>"
+                    else:
+                        alarm_badge = "⏳ <i>Ожидает решения</i>"
+
+                    text += (
+                        f"<b>{idx}. <a href=\"{link}\">{name}</a></b>{username}{city}\n"
+                        f"   💬 <i>«{summary}»</i>\n"
+                        f"   ⏰ {time_str} | {alarm_badge} | 🤖 ИИ отвечает\n\n"
+                    )
+                    c_id = l["id"]
+                    row = []
+                    if l.get("is_alarm_active"):
+                        row.append({"text": "🔕 Стоп звонок", "callback_data": f"lead_mute_{c_id}"})
+                    row.append({"text": f"✅ Принять ({name[:12]})", "callback_data": f"lead_accept_{c_id}"})
+                    kb_rows.append(row)
+
+                if len(pending) > 8:
+                    text += f"<i>...и еще {len(pending) - 8} ожидающих лидов.</i>\n"
+
+        elif filter_mode == "accepted":
+            text = (
+                f"✅ <b>ЛИДЫ: КОГО ЗАБРАЛИ / ПРИНЯТЫЕ ВЛАДЕЛЬЦЕМ ({accepted_cnt})</b>\n"
+                f"<i>Лиды, по которым диалог перехвачен вручную. ИИ в этих чатах остановлен.</i>\n\n"
+            )
+            if not accepted:
+                text += "<i>Пока ни один лид не был перехвачен владельцем.</i>\n"
+            else:
+                for idx, l in enumerate(accepted[:8], 1):
+                    name = l["name"]
+                    link = l["tg_link"]
+                    username = f" (@{l['username']})" if l.get("username") else ""
+                    city = f" • 📍 {l['city']}" if l.get("city") else ""
+                    summary = l.get("proposal_summary") or "Принят владельцем"
+                    time_str = l.get("detected_at") or "ранее"
+
+                    text += (
+                        f"<b>{idx}. <a href=\"{link}\">{name}</a></b>{username}{city}\n"
+                        f"   💬 <i>«{summary}»</i>\n"
+                        f"   ⏰ {time_str} | 👤 <b>Взят владельцем</b> (ИИ выключен)\n\n"
+                    )
+                    c_id = l["id"]
+                    kb_rows.append([{"text": f"🤖 Вернуть ИИ ({name[:14]})", "callback_data": f"lead_resume_{c_id}"}])
+
+                if len(accepted) > 8:
+                    text += f"<i>...и еще {len(accepted) - 8} принятых лидов.</i>\n"
+
+        else:  # filter_mode == "all"
+            text = (
+                f"🔥 <b>ЛИДЫ (ВСТРЕЧИ И КВЕСТЫ)</b>\n"
+                f"<i>Список горячих лидов: собеседники, согласившиеся пойти на квест или предложившие встретиться лично.</i>\n\n"
+                f"📊 <b>Сводка:</b> Всего: <b>{total_cnt}</b> | 🔔 Напоминание/Ожидают: <b>{pending_cnt}</b> | ✅ Забрали: <b>{accepted_cnt}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            )
+
+            # Block 1: Pending
+            text += f"🔔 <b>НА КОМ НАПОМИНАНИЕ / ОЖИДАЮТ ({pending_cnt}):</b>\n"
+            if not pending:
+                text += "<i>Нет активных напоминаний — все лиды приняты.</i>\n\n"
+            else:
+                for idx, l in enumerate(pending[:4], 1):
+                    name = l["name"]
+                    link = l["tg_link"]
+                    username = f" (@{l['username']})" if l.get("username") else ""
+                    city = f" • 📍 {l['city']}" if l.get("city") else ""
+                    summary = l.get("proposal_summary") or "Согласился на квест 🎯"
+                    time_str = l.get("detected_at") or "недавно"
+
+                    if l.get("is_alarm_active"):
+                        alarm_badge = "🚨 <b>ЗВОНИТ БУДИЛЬНИК</b>"
+                    elif l.get("quest_alarm_muted"):
+                        alarm_badge = "🔕 <i>Напоминание выкл.</i>"
+                    else:
+                        alarm_badge = "⏳ <i>Ожидает решения</i>"
+
+                    text += (
+                        f"<b>{idx}. <a href=\"{link}\">{name}</a></b>{username}{city}\n"
+                        f"   💬 <i>«{summary}»</i>\n"
+                        f"   ⏰ {time_str} | {alarm_badge} | 🤖 ИИ отвечает\n\n"
+                    )
+                    c_id = l["id"]
+                    row = []
+                    if l.get("is_alarm_active"):
+                        row.append({"text": "🔕 Стоп звонок", "callback_data": f"lead_mute_{c_id}"})
+                    row.append({"text": f"✅ Принять ({name[:12]})", "callback_data": f"lead_accept_{c_id}"})
+                    kb_rows.append(row)
+
+                if len(pending) > 4:
+                    text += f"<i>...и еще {len(pending) - 4} в категории «Ожидают» (см. вкладку ниже).</i>\n\n"
+
+            # Block 2: Accepted
+            text += f"✅ <b>КОГО ЗАБРАЛИ / ПРИНЯТЫЕ ВЛАДЕЛЬЦЕМ ({accepted_cnt}):</b>\n"
+            if not accepted:
+                text += "<i>Пока ни один лид не был перехвачен владельцем.</i>\n\n"
+            else:
+                for idx, l in enumerate(accepted[:3], 1):
+                    name = l["name"]
+                    link = l["tg_link"]
+                    username = f" (@{l['username']})" if l.get("username") else ""
+                    city = f" • 📍 {l['city']}" if l.get("city") else ""
+                    summary = l.get("proposal_summary") or "Принят владельцем"
+                    time_str = l.get("detected_at") or "ранее"
+
+                    text += (
+                        f"<b>{idx}. <a href=\"{link}\">{name}</a></b>{username}{city}\n"
+                        f"   💬 <i>«{summary}»</i>\n"
+                        f"   ⏰ {time_str} | 👤 <b>Взят владельцем</b> (ИИ на паузе)\n\n"
+                    )
+                    c_id = l["id"]
+                    kb_rows.append([{"text": f"🤖 Включить ИИ ({name[:14]})", "callback_data": f"lead_resume_{c_id}"}])
+
+                if len(accepted) > 3:
+                    text += f"<i>...и еще {len(accepted) - 3} в категории «Забрали» (см. вкладку ниже).</i>\n\n"
+
+        # Tab navigation row
+        tab_row = []
+        if filter_mode != "pending":
+            tab_row.append({"text": f"🔔 Ожидают ({pending_cnt})", "callback_data": "menu_leads_pending"})
+        if filter_mode != "accepted":
+            tab_row.append({"text": f"✅ Забрали ({accepted_cnt})", "callback_data": "menu_leads_accepted"})
+        if filter_mode != "all":
+            tab_row.append({"text": f"📋 Все лиды ({total_cnt})", "callback_data": "menu_leads"})
+        if tab_row:
+            kb_rows.append(tab_row)
+
+        # Control row
+        cur_cb = f"menu_leads_{filter_mode}" if filter_mode != "all" else "menu_leads"
+        kb_rows.append([
+            {"text": "🔄 Обновить", "callback_data": cur_cb},
+            {"text": "◀️ В главное меню", "callback_data": "menu_main"},
+        ])
+
+        return text, {"inline_keyboard": kb_rows}
+
     async def build_chats_crm_payload(
         self,
         session: AsyncSession,
@@ -2567,32 +2739,7 @@ class TelegramBotEngine:
 
             if text == "/leads":
                 leads = await StatsService.get_leads(session, db_user.id)
-                if not leads:
-                    text_reply = (
-                        "📭 <b>Пока нет горячих лидов.</b>\n\n"
-                        "Когда кто-то предложит встретиться, попить кофе или поужинать — "
-                        "он мгновенно появится здесь со ссылкой на чат!"
-                    )
-                    kb = {"inline_keyboard": [[{"text": "◀️ В меню", "callback_data": "menu_main"}]]}
-                else:
-                    text_reply = "🔥 <b>ГОРЯЧИЕ ЛИДЫ (ПРЕДЛОЖЕНИЯ ВСТРЕЧИ):</b>\n\n"
-                    kb_rows = []
-                    for idx, lead in enumerate(leads[:8], 1):
-                        name = lead["name"]
-                        link = lead["tg_link"]
-                        c_id = lead.get("id") or lead.get("contact_id")
-                        is_ai = lead.get("ai_active", False)
-                        status_str = "🤖 <b>ИИ включен</b> (бот отвечает)" if is_ai else "⏸ <b>ИИ отключен</b> (ручной режим)"
-                        text_reply += (
-                            f"<b>{idx}. <a href=\"{link}\">{name}</a></b>\n"
-                            f"💬 <i>{lead['proposal_summary']}</i>\n"
-                            f"⏰ <code>{lead['detected_at']}</code> | {status_str}\n\n"
-                        )
-                        btn_txt = f"⏸ Выключить ИИ ({name})" if is_ai else f"🤖 Включить ИИ ({name})"
-                        cb_data = f"lead_accept_{c_id}" if is_ai else f"lead_resume_{c_id}"
-                        kb_rows.append([{"text": btn_txt, "callback_data": cb_data}])
-                    kb_rows.append([{"text": "◀️ В меню", "callback_data": "menu_main"}])
-                    kb = {"inline_keyboard": kb_rows}
+                text_reply, kb = self.build_leads_view(leads, filter_mode="all")
                 await self.send_message(chat_id, text_reply, reply_markup=kb, parse_mode="HTML")
                 return
 
@@ -3059,6 +3206,11 @@ class TelegramBotEngine:
                 if contact and not getattr(contact, "alert_quest_sent", False):
                     contact.alert_quest_sent = True
                     contact.funnel_stage = "quest_agreed"
+                    contact.status = ContactStatus.LEAD_MEETING
+                    if not contact.lead_detected_at:
+                        contact.lead_detected_at = datetime.now(timezone.utc)
+                    if not contact.lead_summary:
+                        contact.lead_summary = f"Согласился на квест: «{alert_msg[:100]}»"
                     await session.commit()
                     await AdminNotifier.send_quest_agreed_alarm(
                         owner_tg_id=self.admin_id,
@@ -3072,6 +3224,11 @@ class TelegramBotEngine:
                 if contact and not getattr(contact, "alert_date_sent", False):
                     contact.alert_date_sent = True
                     contact.funnel_stage = "date_proposed"
+                    contact.status = ContactStatus.LEAD_MEETING
+                    if not contact.lead_detected_at:
+                        contact.lead_detected_at = datetime.now(timezone.utc)
+                    if not contact.lead_summary:
+                        contact.lead_summary = f"Предложение встречи: «{alert_msg[:100]}»"
                     await session.commit()
                     await AdminNotifier.send_date_proposed_alert(
                         owner_tg_id=self.admin_id,
@@ -3943,6 +4100,46 @@ class TelegramBotEngine:
                 )
                 await self.send_message(chat_id, text, reply_markup=self.build_cancel_flow_kb("menu_legend"), parse_mode="HTML")
 
+            elif data.startswith("lead_mute_") or data.startswith("lead_stop_alarm_"):
+                contact_id = int(data.replace("lead_mute_", "").replace("lead_stop_alarm_", ""))
+                AdminNotifier.stop_quest_alarm(contact_id)
+
+                stmt_c = select(Contact).where(Contact.id == contact_id)
+                res_c = await session.execute(stmt_c)
+                contact = res_c.scalars().first()
+                if contact:
+                    contact.quest_alarm_muted = True
+                    if contact.status != ContactStatus.LEAD_MEETING:
+                        contact.status = ContactStatus.LEAD_MEETING
+                    if not contact.lead_detected_at:
+                        contact.lead_detected_at = datetime.now(timezone.utc)
+                    if not contact.lead_summary:
+                        contact.lead_summary = "Согласился на квест 🎯"
+                    await session.commit()
+
+                c_name = (contact.first_name if contact else None) or (contact.username if contact else None) or "собеседником"
+                tg_link = f"https://t.me/{contact.username}" if (contact and contact.username) else (f"tg://user?id={contact.tg_id}" if contact else "#")
+                await self.answer_callback_query(cq_id, "🔕 Напоминания остановлены! ИИ продолжает общение.")
+                kb = {
+                    "inline_keyboard": [
+                        [{"text": "⏸ Принять лида (Остановить ИИ)", "callback_data": f"lead_accept_{contact_id}"}],
+                        [{"text": "🔥 Вкладка: Лиды (Встречи)", "callback_data": "menu_leads"}],
+                        [{"text": "◀️ В главное меню", "callback_data": "menu_main"}]
+                    ]
+                }
+                await self.edit_message(
+                    chat_id,
+                    msg_id,
+                    f"🔕 <b>Напоминание успешно остановлено!</b>\n\n"
+                    f"👤 <b>Собеседник:</b> <a href=\"{tg_link}\">{c_name}</a>\n"
+                    f"• Будильник и повторные напоминания выключены.\n"
+                    f"• ИИ в чате по-прежнему активен и продолжает вести диалог.\n"
+                    f"• Лид сохранен во вкладке <b>«Лиды (Встречи)»</b> в категории «Ожидающие».\n\n"
+                    f"<i>Если захотите перехватить диалог и писать лично — нажмите кнопку «Принять лида» ниже:</i>",
+                    reply_markup=kb,
+                    parse_mode="HTML",
+                )
+
             elif data.startswith("lead_accept_"):
                 contact_id = int(data.replace("lead_accept_", ""))
                 AdminNotifier.stop_quest_alarm(contact_id)
@@ -3951,16 +4148,23 @@ class TelegramBotEngine:
                 res_c = await session.execute(stmt_c)
                 contact = res_c.scalars().first()
                 if contact:
+                    contact.status = ContactStatus.LEAD_MEETING
                     contact.ai_active = False
                     contact.bot_paused = True
                     contact.paused_reason = "quest_lead_accepted_by_owner"
+                    if not contact.lead_detected_at:
+                        contact.lead_detected_at = datetime.now(timezone.utc)
+                    if not contact.lead_summary:
+                        contact.lead_summary = "Согласился на квест 🎯"
                     await session.commit()
 
                 c_name = (contact.first_name if contact else None) or (contact.username if contact else None) or "собеседником"
+                tg_link = f"https://t.me/{contact.username}" if (contact and contact.username) else (f"tg://user?id={contact.tg_id}" if contact else "#")
                 await self.answer_callback_query(cq_id, "✅ Лид принят! Будильник остановлен, ИИ выключен.")
                 kb = {
                     "inline_keyboard": [
                         [{"text": "🤖 Вернуть управление боту (Включить ИИ)", "callback_data": f"lead_resume_{contact_id}"}],
+                        [{"text": "🔥 Вкладка: Лиды (Встречи)", "callback_data": "menu_leads"}],
                         [{"text": "◀️ В главное меню", "callback_data": "menu_main"}]
                     ]
                 }
@@ -3968,8 +4172,10 @@ class TelegramBotEngine:
                     chat_id,
                     msg_id,
                     f"✅ <b>Лид успешно принят!</b>\n\n"
+                    f"👤 <b>Собеседник:</b> <a href=\"{tg_link}\">{c_name}</a>\n"
                     f"• Будильник и повторные напоминания выключены.\n"
-                    f"• ИИ для диалога с <b>{c_name}</b> отключен (бот молчит).\n"
+                    f"• ИИ для диалога отключен (бот молчит).\n"
+                    f"• Лид перемещен в категорию <b>«Забрали»</b> во вкладке «Лиды (Встречи)».\n"
                     f"• Вы можете продолжить общение с мужчиной лично в Telegram.\n\n"
                     f"<i>Если захотите вернуть автоматические ответы нейросети, нажмите кнопку ниже:</i>",
                     reply_markup=kb,
@@ -3988,10 +4194,12 @@ class TelegramBotEngine:
                     await session.commit()
 
                 c_name = (contact.first_name if contact else None) or (contact.username if contact else None) or "собеседником"
+                tg_link = f"https://t.me/{contact.username}" if (contact and contact.username) else (f"tg://user?id={contact.tg_id}" if contact else "#")
                 await self.answer_callback_query(cq_id, "🤖 ИИ снова включен! Бот продолжит общение.")
                 kb = {
                     "inline_keyboard": [
                         [{"text": "⏸ Остановить ИИ (Принять лида)", "callback_data": f"lead_accept_{contact_id}"}],
+                        [{"text": "🔥 Вкладка: Лиды (Встречи)", "callback_data": "menu_leads"}],
                         [{"text": "◀️ В главное меню", "callback_data": "menu_main"}]
                     ]
                 }
@@ -3999,7 +4207,8 @@ class TelegramBotEngine:
                     chat_id,
                     msg_id,
                     f"🤖 <b>Управление возвращено ИИ!</b>\n\n"
-                    f"• ИИ для диалога с <b>{c_name}</b> снова активен.\n"
+                    f"👤 <b>Собеседник:</b> <a href=\"{tg_link}\">{c_name}</a>\n"
+                    f"• ИИ для диалога снова активен.\n"
                     f"• Бот продолжит отвечать собеседнику в обычном режиме.\n\n"
                     f"<i>Чтобы снова перехватить управление и отключить ИИ:</i>",
                     reply_markup=kb,
@@ -4761,35 +4970,16 @@ class TelegramBotEngine:
                 else:
                     await self.answer_callback_query(cq_id, "❌ Не удалось отправить документ.", show_alert=True)
 
-            elif data == "menu_leads":
+            elif data in ("menu_leads", "menu_leads_pending", "menu_leads_accepted"):
                 await self.answer_callback_query(cq_id)
+                filter_mode = "all"
+                if data == "menu_leads_pending":
+                    filter_mode = "pending"
+                elif data == "menu_leads_accepted":
+                    filter_mode = "accepted"
+
                 leads = await StatsService.get_leads(session, db_user_id)
-                if not leads:
-                    text = (
-                        "📭 <b>Пока нет горячих лидов.</b>\n\n"
-                        "Когда кто-то предложит встретиться, попить кофе или поужинать — "
-                        "он мгновенно появится здесь со ссылкой на чат!"
-                    )
-                    kb = {"inline_keyboard": [[{"text": "◀️ В меню", "callback_data": "menu_main"}]]}
-                else:
-                    text = "🔥 <b>ГОРЯЧИЕ ЛИДЫ (ПРЕДЛОЖЕНИЯ ВСТРЕЧИ):</b>\n\n"
-                    kb_rows = []
-                    for idx, lead in enumerate(leads[:8], 1):
-                        name = lead["name"]
-                        link = lead["tg_link"]
-                        c_id = lead.get("id") or lead.get("contact_id")
-                        is_ai = lead.get("ai_active", False)
-                        status_str = "🤖 <b>ИИ включен</b> (бот отвечает)" if is_ai else "⏸ <b>ИИ отключен</b> (ручной режим)"
-                        text += (
-                            f"<b>{idx}. <a href=\"{link}\">{name}</a></b>\n"
-                            f"💬 <i>{lead['proposal_summary']}</i>\n"
-                            f"⏰ <code>{lead['detected_at']}</code> | {status_str}\n\n"
-                        )
-                        btn_txt = f"⏸ Выключить ИИ ({name})" if is_ai else f"🤖 Включить ИИ ({name})"
-                        cb_data = f"lead_accept_{c_id}" if is_ai else f"lead_resume_{c_id}"
-                        kb_rows.append([{"text": btn_txt, "callback_data": cb_data}])
-                    kb_rows.append([{"text": "◀️ В меню", "callback_data": "menu_main"}])
-                    kb = {"inline_keyboard": kb_rows}
+                text, kb = self.build_leads_view(leads, filter_mode=filter_mode)
                 await self.edit_message(chat_id, msg_id, text, reply_markup=kb, parse_mode="HTML")
 
             elif data == "menu_stats":

@@ -714,6 +714,12 @@ class ResponsePlanner:
         "не разобрала голосовое 😭 можешь написать?",
     ]
 
+    @classmethod
+    def classify_meeting_activity(cls, text: str, current_rejected: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Classifies incoming text against the strict meeting negotiation lock (cinema vs quest)."""
+        from companion.services.meeting_planner_service import MeetingPlannerService
+        return MeetingPlannerService.classify_meeting_proposal(text, current_rejected=current_rejected)
+
     # Conversational connectors where a long single message naturally splits into 2 Telegram bubbles
     NATURAL_SPLIT_PATTERNS = [
         re.compile(r"\s+(?=(?:и\s+кстати|а\s+кстати|кстати,|и\s+да,|а\s+вообще|хотя\s+если\s+честно|слушай,\s+а\s+))\b", re.I),

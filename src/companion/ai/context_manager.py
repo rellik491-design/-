@@ -552,11 +552,19 @@ class ContextManager:
             "meeting_planner": {
                 "meeting_control": meeting_resolution.meeting_control,
                 "stage": meeting_resolution.stage,
+                "meeting_state": meeting_resolution.meeting_state,
                 "meeting_city": meeting_resolution.meeting_city,
                 "activity_type": meeting_resolution.activity_type,
+                "meeting_confirmed": meeting_resolution.meeting_confirmed,
+                "meeting_proposed": meeting_resolution.meeting_proposed,
+                "proposed_activity": meeting_resolution.proposed_activity,
+                "redirect_required": meeting_resolution.redirect_required,
+                "suggestions": meeting_resolution.suggestions,
+                "rejected_activities": meeting_resolution.rejected_activities,
                 "selected_options": meeting_resolution.selected_options,
                 "handoff_required": meeting_resolution.handoff_required,
                 "handoff_payload": meeting_resolution.handoff_payload,
+                "resolution": meeting_resolution,
             },
         }
 

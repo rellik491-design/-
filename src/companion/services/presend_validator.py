@@ -56,6 +56,13 @@ class PreSendValidator:
         if not text:
             return False, "empty_after_sanitization", ""
 
+        # Check Meeting Negotiation Lock & Accidental Yes (Section 14 & Section 2)
+        mp_ctx = internal_context.get("meeting_planner")
+        if isinstance(mp_ctx, dict) and (mp_ctx.get("redirect_required") or mp_ctx.get("stage") in ("INTEREST_SHOWN", "PREFERENCE_DISCOVERY")):
+            from companion.services.meeting_planner_service import MeetingPlannerService
+            resolution = mp_ctx.get("resolution")
+            text = MeetingPlannerService.heal_accidental_yes(text, resolution)
+
         # Check 1 & 2: Target author must be USER
         if target_sender_type.upper() in ("BOT", "ASSISTANT", "SELF"):
             logger.error("[PRESEND_VALIDATOR] FAILED Check 1-2: Target author is BOT/ASSISTANT (%s)", target_sender_type)
@@ -155,3 +162,7 @@ class PreSendValidator:
             return False, clean_err or "invalid_outgoing_text", ""
 
         return True, None, text
+
+
+PresendValidator = PreSendValidator
+

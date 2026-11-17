@@ -1438,7 +1438,8 @@ class TimezoneService:
         """
         Scans all personas in the database:
         - Cleans leaked timezone strings in city/district.
-        - Resolves correct canonical city, country, region, and IANA timezone for foreign cities.
+        - Resolves correct canonical city, country, region, and IANA timezone for all cities (America, Europe, CIS, etc.).
+        - Normalizes and links sleep schedule (sleep_start, sleep_end) to the persona local timezone.
         Returns the number of updated records.
         """
         from sqlalchemy import select
@@ -1448,13 +1449,14 @@ class TimezoneService:
         result = await session.execute(stmt)
         personas = result.scalars().all()
         updated_count = 0
+        valid_time_pattern = re.compile(r"^[0-2]\d:[0-5]\d$")
 
         for p in personas:
             changed = False
-            raw_city = p.city or ""
+            raw_city = p.city or "Москва"
             raw_district = p.district or ""
 
-            # Check if city or district contains leaked timezone
+            # 1. Clean leaked timezones or continents
             has_leak = (
                 PARENTHESIZED_TIMEZONE_PATTERN.search(raw_city)
                 or TIMEZONE_IDENTIFIER_PATTERN.search(raw_city)
@@ -1462,38 +1464,74 @@ class TimezoneService:
                 or TIMEZONE_IDENTIFIER_PATTERN.search(raw_district)
             )
 
-            # Check if foreign city is incorrectly mapped to Europe/Moscow or Russia
             geo = cls.get_geo_info(raw_city)
-            is_foreign_mismatch = (
-                geo is not None
-                and (
-                    (geo.timezone != p.timezone_name and p.timezone_name == "Europe/Moscow" and geo.country != "Россия")
-                    or (geo.country != p.country and p.country == "Россия" and geo.country != "Россия")
-                )
-            )
 
-            if has_leak or is_foreign_mismatch:
+            # Check if geography or timezone or region needs update
+            needs_geo_sync = False
+            if geo:
+                if (p.timezone_name != geo.timezone and getattr(p, "timezone_source", "AUTO") == "AUTO"):
+                    needs_geo_sync = True
+                if (geo.country != "Россия" and p.country == "Россия"):
+                    needs_geo_sync = True
+                if (not getattr(p, "region", None) and geo.region):
+                    needs_geo_sync = True
+                if (p.city != geo.canonical_city and raw_city.lower() not in ("london", "new york", "los angeles", "paris", "berlin", "warsaw")):
+                    needs_geo_sync = True
+
+            # 2. Normalize sleep schedule
+            sleep_start = getattr(p, "sleep_start", None) or "23:00"
+            sleep_end = getattr(p, "sleep_end", None) or "08:30"
+            if not valid_time_pattern.match(str(sleep_start)):
+                sleep_start = "23:00"
+                changed = True
+            if not valid_time_pattern.match(str(sleep_end)):
+                sleep_end = "08:30"
+                changed = True
+
+            if p.sleep_start != sleep_start:
+                p.sleep_start = sleep_start
+                changed = True
+            if p.sleep_end != sleep_end:
+                p.sleep_end = sleep_end
+                changed = True
+
+            if has_leak or needs_geo_sync:
                 combined = f"{raw_city}, {raw_district}" if raw_district else raw_city
                 cleaned_data = cls.parse_and_clean_location(combined)
 
-                p.city = cleaned_data["city"]
-                p.district = cleaned_data["district"] or p.district
-                p.country = cleaned_data["country"]
-                p.country_code = cleaned_data.get("country_code", p.country_code or "RU")
-                if cleaned_data.get("region"):
+                if p.city != cleaned_data["city"]:
+                    p.city = cleaned_data["city"]
+                    changed = True
+                if cleaned_data["district"] and p.district != cleaned_data["district"]:
+                    p.district = cleaned_data["district"]
+                    changed = True
+                if p.country != cleaned_data["country"]:
+                    p.country = cleaned_data["country"]
+                    changed = True
+                if getattr(p, "country_code", None) != cleaned_data.get("country_code"):
+                    p.country_code = cleaned_data.get("country_code", "RU")
+                    changed = True
+                if cleaned_data.get("region") and getattr(p, "region", None) != cleaned_data["region"]:
                     p.region = cleaned_data["region"]
+                    changed = True
                 if getattr(p, "timezone_source", "AUTO") == "AUTO" and cleaned_data.get("timezone_name"):
-                    p.timezone_name = cleaned_data["timezone_name"]
+                    if p.timezone_name != cleaned_data["timezone_name"]:
+                        p.timezone_name = cleaned_data["timezone_name"]
+                        changed = True
 
+            elif geo and getattr(p, "region", None) != geo.region:
+                p.region = geo.region
                 changed = True
+
+            if changed:
                 updated_count += 1
                 logger.info(
-                    "[MIGRATION] Cleaned persona #%d: city='%s', district='%s', country='%s', region='%s', tz='%s'",
-                    p.id, p.city, p.district, p.country, getattr(p, "region", None), p.timezone_name
+                    "[MIGRATION] Updated persona #%d: city='%s', district='%s', country='%s', region='%s', tz='%s', sleep='%s-%s'",
+                    p.id, p.city, p.district, p.country, getattr(p, "region", None), p.timezone_name, p.sleep_start, p.sleep_end
                 )
 
         if updated_count > 0:
             await session.commit()
-            logger.info("[MIGRATION] Successfully cleaned %d corrupted persona records.", updated_count)
+            logger.info("[MIGRATION] Successfully updated %d persona records.", updated_count)
 
         return updated_count

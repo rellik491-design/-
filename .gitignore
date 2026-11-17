@@ -17,10 +17,14 @@ __pycache__/
 # Database and Telethon sessions (DO NOT COMMIT REAL DATA)
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 companion.db
 companion.db-journal
+companion.db-shm
+companion.db-wal
 *.session
 *.session-journal
 

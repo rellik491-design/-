@@ -1,3 +1,4 @@
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from companion.config import settings
@@ -7,8 +8,22 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_async_engine(settings.DATABASE_URL, echo=False)
+engine_kwargs = {"echo": False}
+if "sqlite" in settings.DATABASE_URL:
+    engine_kwargs["connect_args"] = {"timeout": 60.0}
+    engine_kwargs["pool_pre_ping"] = True
+
+engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
 async_session_maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+if "sqlite" in settings.DATABASE_URL:
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=60000")
+        cursor.close()
 
 
 async def get_db():
@@ -18,6 +33,10 @@ async def get_db():
 
 async def init_db():
     async with engine.begin() as conn:
+        if "sqlite" in settings.DATABASE_URL:
+            await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            await conn.exec_driver_sql("PRAGMA synchronous=NORMAL")
+            await conn.exec_driver_sql("PRAGMA busy_timeout=60000")
         await conn.run_sync(Base.metadata.create_all)
 
         def _migrate_sqlite_columns(sync_conn):

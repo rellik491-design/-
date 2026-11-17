@@ -69,6 +69,15 @@ class HealthManager:
         "high demand",
         "connection reset",
         "connecterror",
+        "database is locked",
+        "locked",
+        "busy",
+        "sqlite3.operationalerror",
+        "operationalerror",
+        "database locked",
+        "busytimeout",
+        "concurrency",
+        "sqlite",
     ]
 
     @classmethod
@@ -110,8 +119,9 @@ class HealthManager:
     @classmethod
     def report_provider_error(cls, error: Any, context: str = "ai_generation") -> None:
         """
-        Records an error and immediately triggers fail-safe PAUSE / shutdown if ANY error occurs
-        that breaks generation or transports, ensuring the bot shuts down before sending fallbacks.
+        Records an error and enforces circuit-breaker rules:
+        - Critical errors (quota, auth, invalid key) trigger fail-safe PAUSE
+        - Recoverable errors (concurrency, DB lock, network timeout) degrade status but keep bot running
         """
         now = datetime.now(timezone.utc)
         err_str = str(error)
@@ -122,10 +132,18 @@ class HealthManager:
         cls._last_error = err_str[:300]
         cls._last_error_time = now
 
-        # Shut down / pause immediately on any failure to prevent canned fallbacks
-        cls._transition_to_paused(
-            reason=f"СБОЙ В {context}: {err_str[:120]}"
-        )
+        err_cat = cls.classify_error(error)
+        if err_cat == "critical":
+            cls._transition_to_paused(
+                reason=f"КРИТИЧЕСКИЙ СБОЙ В {context}: {err_str[:120]}"
+            )
+        else:
+            logger.warning(
+                "[HEALTH] %s error in %s: %s (consecutive: %d). System active in DEGRADED mode.",
+                err_cat.upper(), context, err_str[:160], cls._consecutive_errors
+            )
+            if cls._state != SystemHealthState.PAUSED:
+                cls._state = SystemHealthState.DEGRADED
 
     @classmethod
     def register_error(cls, error: Any, context: str = "ai_generation") -> None:
@@ -166,6 +184,9 @@ class HealthManager:
             reason
         )
 
+        # Launch background self-healing auto-recovery probe
+        cls._ensure_recovery_probe()
+
         # Notify administrator asynchronously if admin credentials exist
         try:
             from companion.bot.admin_notifier import AdminNotifier
@@ -195,7 +216,59 @@ class HealthManager:
         cls._paused_at = None
         cls._consecutive_errors = 0
         cls._consecutive_successes = 0
-        logger.info("[HEALTH] System manually resumed by %s.", admin_name)
+        if cls._recovery_probe_task and not cls._recovery_probe_task.done():
+            cls._recovery_probe_task.cancel()
+        cls._recovery_probe_task = None
+        logger.info("[HEALTH] System manually resumed by %s. State is RUNNING.", admin_name)
+
+    @classmethod
+    def _ensure_recovery_probe(cls) -> None:
+        """Starts background periodic health probe when PAUSED to auto-recover."""
+        if cls._recovery_probe_task and not cls._recovery_probe_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            cls._recovery_probe_task = loop.create_task(cls._recovery_probe_loop())
+        except RuntimeError:
+            pass
+
+    @classmethod
+    async def _recovery_probe_loop(cls) -> None:
+        """
+        Background self-healing loop: periodically tests DB & AI provider health.
+        If healthy, automatically restores RUNNING state.
+        """
+        logger.info("[HEALTH_PROBE] Auto-recovery background probe started.")
+        while cls._state == SystemHealthState.PAUSED:
+            await asyncio.sleep(30.0)
+            if cls._state != SystemHealthState.PAUSED:
+                break
+            try:
+                # 1. Test database health
+                from companion.models.db import async_session_maker
+                from sqlalchemy import text
+                async with async_session_maker() as session:
+                    await session.execute(text("SELECT 1"))
+
+                # 2. Test AI provider health
+                ai_ok = await cls.probe_ai_health()
+                if ai_ok:
+                    logger.info("[HEALTH_PROBE] Auto-recovery probe SUCCESS! Services restored. Auto-resuming...")
+                    cls.manual_resume(admin_name="AutoRecoverySelfHealing")
+                    try:
+                        from companion.bot.admin_notifier import AdminNotifier
+                        admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", None) or 8501711204
+                        resume_text = (
+                            "✅ <b>СИСТЕМА АВТОМАТИЧЕСКИ ВОССТАНОВЛЕНА (SELF-HEALING)</b>\n\n"
+                            "Связь с базой данных и AI-провайдером успешно восстановлена.\n"
+                            "Все диалоги и автоответы снова активны!"
+                        )
+                        await AdminNotifier.send_telegram_alert(resume_text, admin_id)
+                    except Exception as notify_err:
+                        logger.warning("Failed to send auto-recovery notification: %s", notify_err)
+                    break
+            except Exception as probe_err:
+                logger.debug("[HEALTH_PROBE] Probe check in progress (still unhealthy: %s)", probe_err)
 
     @classmethod
     async def probe_ai_health(cls, api_key: Optional[str] = None) -> bool:

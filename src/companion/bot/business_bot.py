@@ -394,8 +394,13 @@ class BusinessChatBot:
         # 1. Verify health status and active subscription
         from companion.services.health_manager import HealthManager
         if HealthManager.is_paused():
-            logger.warning("[BUSINESS_BOT] System in SAFE PAUSED state (%s). Suppressing message processing for chat %s", HealthManager.get_paused_reason(), chat_id)
-            return {"action": "paused_due_to_health", "reason": HealthManager.get_paused_reason()}
+            paused_reason = HealthManager.get_paused_reason() or ""
+            if "database is locked" in paused_reason.lower() or "operationalerror" in paused_reason.lower():
+                logger.info("[BUSINESS_BOT] HealthManager was paused due to transient DB lock, auto-resuming now...")
+                HealthManager.manual_resume(admin_name="AutoResumeDBLock")
+            else:
+                logger.warning("[BUSINESS_BOT] System in SAFE PAUSED state (%s). Suppressing message processing for chat %s", paused_reason, chat_id)
+                return {"action": "paused_due_to_health", "reason": paused_reason}
 
         is_valid = await InviteService.is_business_connection_valid(session, connection_id, now=now)
         if not is_valid:
@@ -525,7 +530,11 @@ class BusinessChatBot:
             logger.exception("[BUSINESS_BOT] Error in process_incoming_message: %s", proc_err)
             from companion.services.health_manager import HealthManager
             HealthManager.report_provider_error(proc_err, context="business_bot_process_incoming")
-            return {"action": "paused_due_to_error", "reason": str(proc_err)}
+            err_type = HealthManager.classify_error(proc_err)
+            if err_type == "critical":
+                return {"action": "paused_due_to_error", "reason": str(proc_err)}
+            else:
+                return {"action": "error_retry", "reason": str(proc_err)}
 
         # Subscription owner lookup
         owner_user_stmt = select(User).where(User.id == account.user_id)

@@ -876,20 +876,12 @@ class AIService:
                 HealthManager.register_success()
             else:
                 err_msg = "Model returned empty or null content"
-                logger.error("[AI_SERVICE] %s. Shutting down bot and alerting admin.", err_msg)
+                logger.warning("[AI_SERVICE] %s. Reporting recoverable degradation.", err_msg)
                 HealthManager.report_provider_error(err_msg, context="empty_model_response")
-                if contact:
-                    contact.bot_paused = True
-                    contact.ai_active = 0
-                    contact.paused_reason = err_msg
                 return ""
         except Exception as gen_err:
-            logger.error("[AI_SERVICE] Fatal error in AI generation (%s). Shutting down bot and notifying admin.", gen_err)
+            logger.error("[AI_SERVICE] Error in AI generation (%s).", gen_err)
             HealthManager.report_provider_error(gen_err, context="ai_generation_exception")
-            if contact:
-                contact.bot_paused = True
-                contact.ai_active = 0
-                contact.paused_reason = str(gen_err)
             return ""
 
         if not raw_text:

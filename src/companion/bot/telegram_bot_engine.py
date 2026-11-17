@@ -2726,6 +2726,29 @@ class TelegramBotEngine:
                 return
 
             # 4. Slash Commands Dispatcher
+            if text in ("/resume", "/unpause"):
+                from companion.services.health_manager import HealthManager
+                HealthManager.manual_resume(admin_name=f"User_{db_user.id}")
+                stmt_unpause = select(Contact).where(Contact.user_id == db_user.id, Contact.bot_paused == True)
+                contacts_to_unpause = (await session.execute(stmt_unpause)).scalars().all()
+                unpaused_cnt = 0
+                for c in contacts_to_unpause:
+                    if c.paused_reason in ("empty_model_response", "Model returned empty or null content", "ai_generation_exception", None) or "error" in (c.paused_reason or "").lower() or "lock" in (c.paused_reason or "").lower():
+                        c.bot_paused = False
+                        c.ai_active = True
+                        c.paused_reason = None
+                        unpaused_cnt += 1
+                await session.commit()
+                await self.send_message(
+                    chat_id,
+                    f"✅ <b>Система и автоответы успешно возобновлены!</b>\n\n"
+                    f"• Статус HealthManager: <b>RUNNING</b>\n"
+                    f"• Возобновлено диалогов: <b>{unpaused_cnt}</b>\n\n"
+                    f"Нейросеть готова отвечать на все входящие сообщения.",
+                    parse_mode="HTML"
+                )
+                return
+
             if text in ("/start", "/menu"):
                 sub = await SubscriptionService.get_active_subscription(session, db_user.id)
                 sub_info = SubscriptionService.get_detailed_status(sub)
@@ -5368,6 +5391,9 @@ class TelegramBotEngine:
                     contact.ai_active = True
                     contact.paused_reason = None
                     await session.commit()
+                    from companion.services.health_manager import HealthManager
+                    if HealthManager.is_paused():
+                        HealthManager.manual_resume(admin_name=f"Contact_{contact_id}_Unpause")
                     c_name = html.escape(contact.first_name or f"User_{contact.tg_id}")
                     await self.answer_callback_query(cq_id, "▶️ Автоответ бота успешно возобновлен!")
                     await self.edit_message(

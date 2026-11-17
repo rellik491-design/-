@@ -313,3 +313,96 @@ def test_14_local_time_and_sleep_in_portland():
     # 14:00 Portland time -> Awake
     dt_1400 = pt_tz.localize(datetime(2026, 11, 17, 14, 0, 0))
     assert TimezoneService.is_persona_sleeping("America/Los_Angeles", "01:00", "08:30", dt_1400) is False
+
+
+@pytest.mark.asyncio
+async def test_15_fetch_live_city_weather():
+    """15. fetch_live_city_weather returns weather dict with temperature, icon, condition, wind, humidity."""
+    # Test known city coordinates (offline fast-path or API)
+    weather = await TimezoneService.fetch_live_city_weather("Москва")
+    assert weather is not None
+    assert "temperature" in weather
+    assert "condition" in weather
+    assert "icon" in weather
+    assert isinstance(weather["temperature"], (int, float))
+
+    # Test empty or None
+    assert await TimezoneService.fetch_live_city_weather("") is None
+
+
+def test_16_format_city_detailed_report():
+    """16. format_city_detailed_report formats comprehensive city card with timezone, countdown, and weather."""
+    p = Persona(
+        name="Алиса",
+        age=23,
+        city="Portland",
+        district="",
+        country="США",
+        region="Орегон",
+        timezone_name="America/Los_Angeles",
+        sleep_start="01:00",
+        sleep_end="08:30",
+    )
+
+    weather_sample = {
+        "city": "Portland",
+        "temperature": 7.5,
+        "feels_like": 5.2,
+        "condition": "пасмурно",
+        "icon": "☁️",
+        "wind_speed": 12.0,
+        "humidity": 85,
+    }
+
+    # Reference time: 05:00 Portland time (UTC 13:00 in standard time)
+    ref_utc = datetime(2026, 1, 15, 13, 0, 0, tzinfo=timezone.utc)
+    report = TimezoneService.format_city_detailed_report(p, weather_sample, ref_utc_dt=ref_utc)
+
+    assert "🌍 <b>ГОРОД И МЕСТНОЕ ВРЕМЯ МОДЕЛИ</b>" in report
+    assert "Portland" in report
+    assert "США, Орегон" in report
+    assert "<code>America/Los_Angeles</code>" in report
+    assert "• Точное время: <b>05:00</b>" in report
+    assert "😴 <b>Спит</b>" in report
+    assert "до подъёма ~3 ч. 30 мин." in report
+    assert "+7.5°C" in report
+    assert "Пасмурно" in report
+    assert "12.0 км/ч" in report
+    assert "85%" in report
+
+    # Test awake state at 14:00 Portland time (UTC 22:00)
+    ref_utc_awake = datetime(2026, 1, 15, 22, 0, 0, tzinfo=timezone.utc)
+    report_awake = TimezoneService.format_city_detailed_report(p, weather_sample, ref_utc_dt=ref_utc_awake)
+    assert "• Точное время: <b>14:00</b>" in report_awake
+    assert "☀️ <b>Бодрствует</b>" in report_awake
+    assert "до отбоя ~11 ч. 00 мин." in report_awake
+
+
+def test_17_legend_keyboard_has_weather_button():
+    """17. build_legend_keyboard includes '🌤️ Время и погода' button, customizable with city name."""
+    engine = TelegramBotEngine(token="mock_token", admin_id=123)
+
+    kb_portland = engine.build_legend_keyboard(account_id=5, city_name="Portland")
+    all_buttons = [b for row in kb_portland["inline_keyboard"] for b in row]
+    weather_btn = next((b for b in all_buttons if b["callback_data"] == "city_weather_info_5"), None)
+    assert weather_btn is not None
+    assert weather_btn["text"] == "🌤️ Время и погода (Portland)"
+
+    kb_city_info = engine.build_city_info_keyboard(account_id=5)
+    info_buttons = [b for row in kb_city_info["inline_keyboard"] for b in row]
+    refresh_btn = next((b for b in info_buttons if b["callback_data"] == "refresh_city_info_5"), None)
+    back_btn = next((b for b in info_buttons if b["callback_data"] == "legend_acc_5"), None)
+    assert refresh_btn is not None
+    assert back_btn is not None
+
+
+@pytest.mark.asyncio
+async def test_18_bot_commands_include_city_and_time():
+    """18. Slash commands include /city and /time."""
+    engine = TelegramBotEngine(token="mock_token", admin_id=123)
+
+    # We inspect setup_bot_commands logic
+    import inspect
+    source = inspect.getsource(engine.setup_bot_commands)
+    assert '"command": "city"' in source
+    assert '"command": "time"' in source

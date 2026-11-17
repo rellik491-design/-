@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import httpx
 import pytz
 
 logger = logging.getLogger(__name__)
@@ -1240,6 +1241,273 @@ CONTINENT_NAMES_PATTERN = re.compile(
 
 
 class TimezoneService:
+    WEATHER_ICONS: Dict[int, Tuple[str, str]] = {
+        0: ("☀️", "ясно"),
+        1: ("🌤️", "в основном ясно"),
+        2: ("⛅", "переменная облачность"),
+        3: ("☁️", "пасмурно"),
+        45: ("🌫️", "туман"),
+        48: ("🌫️", "изморозь"),
+        51: ("🌦️", "лёгкая морось"),
+        53: ("🌦️", "морось"),
+        55: ("🌧️", "густая морось"),
+        61: ("🌧️", "небольшой дождь"),
+        63: ("🌧️", "умеренный дождь"),
+        65: ("🌧️", "сильный дождь"),
+        71: ("🌨️", "небольшой снегопад"),
+        73: ("🌨️", "снегопад"),
+        75: ("❄️", "сильный снегопад"),
+        77: ("🌨️", "снежные зёрна"),
+        80: ("🌦️", "кратковременный ливень"),
+        81: ("🌧️", "сильный ливень"),
+        82: ("⛈️", "очень сильный ливень"),
+        85: ("🌨️", "ливневый снегопад"),
+        86: ("❄️", "сильный снегопад"),
+        95: ("⛈️", "гроза"),
+    }
+
+    @classmethod
+    async def fetch_live_city_weather(cls, city_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetches real-time weather and forecast data for any city in the world using Open-Meteo.
+        Supports fast offline coordinates for CIS/major cities and dynamic geocoding for US/world cities.
+        """
+        if not city_name:
+            return None
+
+        c_low = city_name.strip().lower()
+        lat, lon, display_name = None, None, city_name
+
+        CITY_COORDINATES = {
+            "москва": (55.7558, 37.6173, "Москва"),
+            "питер": (59.9343, 30.3351, "Санкт-Петербург"),
+            "санкт-петербург": (59.9343, 30.3351, "Санкт-Петербург"),
+            "самара": (53.1959, 50.1002, "Самара"),
+            "казань": (55.7887, 49.1221, "Казань"),
+            "сочи": (43.6028, 39.7342, "Сочи"),
+            "екатеринбург": (56.8389, 60.6057, "Екатеринбург"),
+            "новосибирск": (55.0084, 82.9357, "Новосибирск"),
+            "краснодар": (45.0355, 38.9753, "Краснодар"),
+            "дубай": (25.2048, 55.2708, "Дубай"),
+            "лондон": (51.5074, -0.1278, "London"),
+            "киев": (50.4501, 30.5234, "Киев"),
+            "минск": (53.9045, 27.5615, "Минск"),
+            "лос-анджелес": (34.0522, -118.2437, "Los Angeles"),
+            "нью-йорк": (40.7128, -74.0060, "New York"),
+            "портленд": (45.5234, -122.6762, "Portland"),
+            "шарлотт": (35.2271, -80.8431, "Charlotte"),
+        }
+
+        if c_low in CITY_COORDINATES:
+            lat, lon, display_name = CITY_COORDINATES[c_low]
+        else:
+            geo = cls.get_geo_info(c_low)
+            search_query = city_name
+            if geo:
+                for a in geo.aliases:
+                    if a.isascii() and len(a) > 2:
+                        search_query = a
+                        break
+
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    g_resp = await client.get(
+                        "https://geocoding-api.open-meteo.com/v1/search",
+                        params={"name": search_query, "count": 1, "format": "json"},
+                    )
+                    if g_resp.status_code == 200:
+                        data = g_resp.json()
+                        if data.get("results"):
+                            res = data["results"][0]
+                            lat, lon = res["latitude"], res["longitude"]
+                            display_name = res.get("name", city_name)
+            except Exception as e:
+                logger.warning("Geocoding lookup error for %s: %s", city_name, e)
+
+        if lat is None or lon is None:
+            return None
+
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                w_resp = await client.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": lat,
+                        "longitude": lon,
+                        "current_weather": "true",
+                        "hourly": "relativehumidity_2m,apparent_temperature",
+                        "timezone": "auto",
+                    },
+                )
+                if w_resp.status_code == 200:
+                    data = w_resp.json()
+                    cw = data.get("current_weather", {})
+                    hourly = data.get("hourly", {})
+                    temp = cw.get("temperature")
+                    w_code = cw.get("weathercode", 0)
+                    wind = cw.get("windspeed")
+                    is_day = cw.get("is_day", 1)
+                    humidity = hourly.get("relativehumidity_2m", [None])[0]
+                    feels_like = hourly.get("apparent_temperature", [None])[0]
+
+                    icon, desc = cls.WEATHER_ICONS.get(w_code, ("🌤️", "обычная погода"))
+                    if not is_day and w_code == 0:
+                        icon = "🌙"
+                        desc = "ясно, звёздное небо"
+                    elif not is_day and w_code in (1, 2):
+                        icon = "☁️"
+
+                    return {
+                        "city": display_name,
+                        "temperature": temp,
+                        "feels_like": feels_like,
+                        "weather_code": w_code,
+                        "icon": icon,
+                        "condition": desc,
+                        "wind_speed": wind,
+                        "humidity": humidity,
+                        "is_day": bool(is_day),
+                    }
+        except Exception as e:
+            logger.warning("Open-Meteo forecast error for %s: %s", city_name, e)
+
+        return None
+
+    @classmethod
+    def format_city_detailed_report(
+        cls, persona: Any, weather: Optional[Dict[str, Any]] = None, ref_utc_dt: Optional[datetime] = None
+    ) -> str:
+        """
+        Builds a comprehensive real-time report for the persona's city:
+        - Current local time, date, day of week
+        - Timezone, UTC offset, difference with Moscow time
+        - Sleep status (asleep / awake), active sleep window, time until wake-up / bed
+        - Current live weather (temperature, feels like, condition with emoji, wind, humidity)
+        - AI awareness reminder
+        """
+        city = persona.city or "Москва"
+        district = getattr(persona, "district", "") or ""
+        country = getattr(persona, "country", "") or ""
+        region = getattr(persona, "region", "") or ""
+
+        clean_city = cls.clean_geographic_string(city)
+        clean_dist = cls.clean_geographic_string(district) if district else ""
+        if clean_dist.lower() in ("usa", "сша", "us", "uk", "россия", "украина", "united states") or clean_dist.lower() == clean_city.lower():
+            clean_dist = ""
+        loc_str = f"{clean_city}, {clean_dist}" if clean_dist else clean_city
+
+        country, region = cls.resolve_country_and_region(clean_city, country, region, persona.timezone_name)
+        country_region_str = f"{country}, {region}" if region and region.lower() != country.lower() else country
+
+        tz_name = getattr(persona, "timezone_name", "Europe/Moscow") or "Europe/Moscow"
+        local_dt = cls.get_local_datetime(tz_name, ref_utc_dt)
+        time_str = local_dt.strftime("%H:%M")
+
+        ru_months = {
+            1: "января", 2: "февраля", 3: "марта", 4: "апреля", 5: "мая", 6: "июня",
+            7: "июля", 8: "августа", 9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+        }
+        ru_weekdays = {
+            0: "понедельник", 1: "вторник", 2: "среда", 3: "четверг",
+            4: "пятница", 5: "суббота", 6: "воскресенье",
+        }
+        full_date_str = f"{local_dt.day} {ru_months.get(local_dt.month, '')} {local_dt.year} г. ({ru_weekdays.get(local_dt.weekday(), '')})"
+
+        float_h = local_dt.hour + local_dt.minute / 60.0
+        if 5.0 <= float_h < 11.0:
+            period_ru = "🌅 Утро"
+        elif 11.0 <= float_h < 17.0:
+            period_ru = "☀️ День"
+        elif 17.0 <= float_h < 22.0:
+            period_ru = "🌆 Вечер"
+        elif 22.0 <= float_h < 24.0 or 0.0 <= float_h < 1.0:
+            period_ru = "🌃 Поздний вечер"
+        else:
+            period_ru = "🌌 Ночь"
+
+        utc_off = local_dt.utcoffset()
+        tot_sec = int(utc_off.total_seconds()) if utc_off else 0
+        sign = "+" if tot_sec >= 0 else "-"
+        hours = abs(tot_sec) // 3600
+        mins = (abs(tot_sec) % 3600) // 60
+        gmt_str = f"GMT{sign}{hours}" if mins == 0 else f"GMT{sign}{hours}:{mins:02d}"
+        is_dst = bool(local_dt.dst())
+        dst_label = "летнее время" if is_dst else "стандартное время"
+
+        msk_dt = cls.get_local_datetime("Europe/Moscow", ref_utc_dt)
+        off_persona = local_dt.utcoffset().total_seconds() if local_dt.utcoffset() else 0
+        off_msk = msk_dt.utcoffset().total_seconds() if msk_dt.utcoffset() else 0
+        diff_hours = int((off_persona - off_msk) // 3600)
+        msk_now_str = msk_dt.strftime("%H:%M")
+        if diff_hours == 0:
+            diff_str = f"совпадает с МСК (в Москве {msk_now_str})"
+        elif diff_hours > 0:
+            diff_str = f"+{diff_hours} ч. от МСК (в Москве {msk_now_str})"
+        else:
+            diff_str = f"{diff_hours} ч. от МСК (в Москве {msk_now_str})"
+
+        sleep_start = getattr(persona, "sleep_start", "23:00") or "23:00"
+        sleep_end = getattr(persona, "sleep_end", "08:30") or "08:30"
+        is_sleeping = cls.is_persona_sleeping(tz_name, sleep_start, sleep_end, local_dt)
+
+        start_t = cls.parse_time_str(sleep_start)
+        end_t = cls.parse_time_str(sleep_end)
+        now_t = local_dt.time()
+        now_mins = now_t.hour * 60 + now_t.minute
+        start_mins = start_t.hour * 60 + start_t.minute
+        end_mins = end_t.hour * 60 + end_t.minute
+
+        if is_sleeping:
+            if end_mins >= now_mins:
+                rem_m = end_mins - now_mins
+            else:
+                rem_m = (24 * 60 - now_mins) + end_mins
+            rem_h = rem_m // 60
+            rem_min_tail = rem_m % 60
+            state_badge = f"😴 <b>Спит</b> <i>(до подъёма ~{rem_h} ч. {rem_min_tail:02d} мин.)</i>"
+        else:
+            if start_mins >= now_mins:
+                rem_m = start_mins - now_mins
+            else:
+                rem_m = (24 * 60 - now_mins) + start_mins
+            rem_h = rem_m // 60
+            rem_min_tail = rem_m % 60
+            state_badge = f"☀️ <b>Бодрствует</b> <i>(до отбоя ~{rem_h} ч. {rem_min_tail:02d} мин.)</i>"
+
+        if weather and weather.get("temperature") is not None:
+            temp = weather["temperature"]
+            feels = weather.get("feels_like")
+            icon = weather.get("icon", "🌤️")
+            cond = weather.get("condition", "обычная погода")
+            wind = weather.get("wind_speed", 0)
+            hum = weather.get("humidity")
+            feels_str = f" (ощущается как <b>{feels:+.1f}°C</b>)" if feels is not None else ""
+            hum_str = f"\n• Влажность: <b>{hum}%</b>" if hum is not None else ""
+            weather_text = (
+                f"🌤️ <b>Погода прямо сейчас:</b>\n"
+                f"• Температура: <b>{temp:+.1f}°C</b>{feels_str}\n"
+                f"• Состояние: {icon} <b>{cond.capitalize()}</b>\n"
+                f"• Ветер: <b>{wind} км/ч</b>{hum_str}"
+            )
+        else:
+            weather_text = "🌤️ <b>Погода:</b> <i>(информация о погоде обновляется...)</i>"
+
+        return (
+            f"🌍 <b>ГОРОД И МЕСТНОЕ ВРЕМЯ МОДЕЛИ</b>\n\n"
+            f"📍 <b>Локация:</b> {loc_str}\n"
+            f"🌎 <b>Страна и регион:</b> {country_region_str}\n"
+            f"🌐 <b>Часовой пояс:</b> <code>{tz_name}</code> ({gmt_str}, {dst_label})\n\n"
+            f"⏱ <b>ТЕКУЩЕЕ ВРЕМЯ В ГОРОДЕ:</b>\n"
+            f"• Точное время: <b>{time_str}</b>\n"
+            f"• Дата: <b>{full_date_str}</b>\n"
+            f"• Период суток: <b>{period_ru}</b>\n"
+            f"• Разница с Москвой: <b>{diff_str}</b>\n\n"
+            f"🌙 <b>РЕЖИМ СНА И АКТИВНОСТЬ:</b>\n"
+            f"• Расписание сна: 🌙 <code>{sleep_start} – {sleep_end}</code>\n"
+            f"• Статус модели: {state_badge}\n\n"
+            f"{weather_text}\n\n"
+            f"💡 <i>Нейросеть живет строго по этому местному времени: знает который час у неё за окном, какая погода и не отвечает во время сна.</i>"
+        )
     @classmethod
     def clean_geographic_string(cls, text: Optional[str]) -> str:
         """

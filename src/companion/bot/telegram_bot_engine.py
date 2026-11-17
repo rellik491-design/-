@@ -235,6 +235,8 @@ class TelegramBotEngine:
             {"command": "sub", "description": "⭐ Моя подписка и продление"},
             {"command": "accounts", "description": "📱 Подключенные Telegram-аккаунты"},
             {"command": "legend", "description": "⚙️ Настройка анкеты девушки"},
+            {"command": "city", "description": "🌤️ Время и погода в городе модели"},
+            {"command": "time", "description": "🕐 Местное время в городе модели"},
             {"command": "styles", "description": "🎭 Режимы и стили общения"},
             {"command": "voice", "description": "🎙 Тест голосовых сообщений"},
             {"command": "leads", "description": "🔥 Горячие лиды на свидание/квест"},
@@ -709,7 +711,10 @@ class TelegramBotEngine:
                 {"text": "📱 Мои аккаунты", "callback_data": "menu_accounts"},
             ],
             [
+                {"text": "🌤️ Время и погода", "callback_data": "city_weather_info"},
                 {"text": "🎙 Тест войса", "callback_data": "menu_voice_test"},
+            ],
+            [
                 {"text": "📈 Общая статистика", "callback_data": "menu_stats"},
             ],
         ]
@@ -1076,6 +1081,7 @@ class TelegramBotEngine:
         account_id: Optional[int] = None,
         has_multiple_accounts: bool = False,
         photo_count: Optional[int] = None,
+        city_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         suffix = f"_{account_id}" if account_id is not None else ""
         style_cb = f"style_acc_{account_id}" if account_id is not None else "menu_styles"
@@ -1085,6 +1091,11 @@ class TelegramBotEngine:
             f"📸 Фотографии модели ({photo_count} шт.)"
             if photo_count is not None
             else "📸 Фотографии модели"
+        )
+        weather_btn_label = (
+            f"🌤️ Время и погода ({city_name})"
+            if city_name
+            else "🌤️ Время и погода в городе"
         )
 
         rows = [
@@ -1109,6 +1120,9 @@ class TelegramBotEngine:
                 {"text": "🎭 Стиль общения", "callback_data": style_cb},
             ],
             [
+                {"text": weather_btn_label, "callback_data": f"city_weather_info{suffix}"},
+            ],
+            [
                 {"text": "⚡️ Заполнить легенду одним сообщением (AI)", "callback_data": f"legend_wizard_auto{suffix}"},
             ],
             [
@@ -1125,6 +1139,20 @@ class TelegramBotEngine:
             rows.append([{"text": "◀️ Назад в главное меню", "callback_data": "menu_main"}])
 
         return {"inline_keyboard": rows}
+
+    def build_city_info_keyboard(self, account_id: Optional[int] = None) -> Dict[str, Any]:
+        acc_code = str(account_id) if account_id is not None else "default"
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "🔄 Обновить время и погоду", "callback_data": f"refresh_city_info_{acc_code}"},
+                ],
+                [
+                    {"text": "👤 Вернуться к анкете", "callback_data": f"legend_acc_{acc_code}"},
+                    {"text": "◀️ В главное меню", "callback_data": "menu_main"},
+                ],
+            ]
+        }
 
     def build_legend_accounts_keyboard(
         self, accounts: List[AccountSession], personas: Dict[int, Persona]
@@ -2878,6 +2906,60 @@ class TelegramBotEngine:
                 await self.send_message(chat_id, text_reply, reply_markup=kb, parse_mode="HTML")
                 return
 
+            clean_cmd = text.split()[0].split("@")[0].lower() if text else ""
+            if clean_cmd in ("/city", "/time", "/weather", "/city_info"):
+                accounts = await AccountService.get_user_accounts(session, db_user.id)
+                if len(accounts) > 1:
+                    buttons = []
+                    for acc in accounts:
+                        p = await AccountService.ensure_account_persona(session, acc)
+                        acc_title = acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")
+                        p_city = p.city or "Москва"
+                        buttons.append([
+                            {"text": f"🌤️ {acc_title} ({p_city})", "callback_data": f"city_weather_info_{acc.id}"}
+                        ])
+                    buttons.append([{"text": "⭐ Общий шаблон по умолчанию", "callback_data": "city_weather_info_default"}])
+                    buttons.append([{"text": "◀️ Назад в главное меню", "callback_data": "menu_main"}])
+                    text_reply = (
+                        "🌤️ <b>ВРЕМЯ И ПОГОДА В ГОРОДЕ МОДЕЛИ</b>\n\n"
+                        f"У вас подключено: <b>{len(accounts)} акк.</b>\n\n"
+                        "Выберите аккаунт, чтобы посмотреть точное местное время, часовой пояс, статус сна и погоду:"
+                    )
+                    await self.send_message(chat_id, text_reply, reply_markup={"inline_keyboard": buttons}, parse_mode="HTML")
+                    return
+                elif len(accounts) == 1:
+                    acc = accounts[0]
+                    persona = await AccountService.ensure_account_persona(session, acc)
+                    from companion.services.timezone_service import TimezoneService
+                    weather = await TimezoneService.fetch_live_city_weather(persona.city or "Москва")
+                    report = TimezoneService.format_city_detailed_report(persona, weather)
+                    await self.send_message(
+                        chat_id,
+                        report,
+                        reply_markup=self.build_city_info_keyboard(account_id=acc.id),
+                        parse_mode="HTML",
+                    )
+                    return
+                else:
+                    stmt = select(Persona).where(Persona.user_id == db_user.id).order_by(Persona.id.asc())
+                    res = await session.execute(stmt)
+                    persona = res.scalars().first()
+                    if not persona:
+                        persona = Persona(user_id=db_user.id)
+                        session.add(persona)
+                        await session.commit()
+                        await session.refresh(persona)
+                    from companion.services.timezone_service import TimezoneService
+                    weather = await TimezoneService.fetch_live_city_weather(persona.city or "Москва")
+                    report = TimezoneService.format_city_detailed_report(persona, weather)
+                    await self.send_message(
+                        chat_id,
+                        report,
+                        reply_markup=self.build_city_info_keyboard(account_id=None),
+                        parse_mode="HTML",
+                    )
+                    return
+
             if text == "/legend":
                 accounts = await AccountService.get_user_accounts(session, db_user.id)
                 if len(accounts) > 1:
@@ -2907,7 +2989,7 @@ class TelegramBotEngine:
                     await self.send_message(
                         chat_id,
                         self.format_legend_card(persona, account=acc, photo_count=p_count),
-                        reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=False, photo_count=p_count),
+                        reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=False, photo_count=p_count, city_name=persona.city),
                         parse_mode="HTML",
                     )
                     return
@@ -2926,7 +3008,7 @@ class TelegramBotEngine:
                     await self.send_message(
                         chat_id,
                         self.format_legend_card(persona, account=None, photo_count=p_count),
-                        reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=False, photo_count=p_count),
+                        reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=False, photo_count=p_count, city_name=persona.city),
                         parse_mode="HTML",
                     )
                     return
@@ -4515,7 +4597,7 @@ class TelegramBotEngine:
                     p_count = p_stats.get("total_photos", 0)
                     text = self.format_legend_card(persona, account=acc, photo_count=p_count)
                     await self.edit_message(
-                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=False, photo_count=p_count), parse_mode="HTML"
+                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=False, photo_count=p_count, city_name=persona.city), parse_mode="HTML"
                     )
                 else:
                     stmt = select(Persona).where(Persona.user_id == db_user_id).order_by(Persona.id.asc())
@@ -4530,8 +4612,82 @@ class TelegramBotEngine:
                     p_count = p_stats.get("total_photos", 0)
                     text = self.format_legend_card(persona, account=None, photo_count=p_count)
                     await self.edit_message(
-                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=False, photo_count=p_count), parse_mode="HTML"
+                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=False, photo_count=p_count, city_name=persona.city), parse_mode="HTML"
                     )
+
+            elif data.startswith("city_weather_info") or data.startswith("refresh_city_info_"):
+                self._user_input_states.pop(user_tg_id, None)
+                if data.startswith("refresh_city_info_"):
+                    acc_code = data.replace("refresh_city_info_", "")
+                    is_refresh = True
+                else:
+                    acc_code = data.replace("city_weather_info", "").lstrip("_")
+                    is_refresh = False
+
+                accounts = await AccountService.get_user_accounts(session, db_user_id)
+                if not acc_code and len(accounts) > 1:
+                    await self.answer_callback_query(cq_id)
+                    buttons = []
+                    for acc in accounts:
+                        p = await AccountService.ensure_account_persona(session, acc)
+                        acc_title = acc.first_name or (f"@{acc.username}" if acc.username else f"#{acc.id}")
+                        p_city = p.city or "Москва"
+                        buttons.append([
+                            {"text": f"🌤️ {acc_title} ({p_city})", "callback_data": f"city_weather_info_{acc.id}"}
+                        ])
+                    buttons.append([{"text": "⭐ Общий шаблон по умолчанию", "callback_data": "city_weather_info_default"}])
+                    buttons.append([{"text": "◀️ Назад в главное меню", "callback_data": "menu_main"}])
+                    text_reply = (
+                        "🌤️ <b>ВРЕМЯ И ПОГОДА В ГОРОДЕ МОДЕЛИ</b>\n\n"
+                        f"У вас подключено: <b>{len(accounts)} акк.</b>\n\n"
+                        "Выберите аккаунт, чтобы посмотреть точное местное время, часовой пояс, статус сна и погоду:"
+                    )
+                    await self.edit_message(chat_id, msg_id, text_reply, reply_markup={"inline_keyboard": buttons}, parse_mode="HTML")
+                    return
+
+                if not acc_code:
+                    acc_code = "default" if not accounts else str(accounts[0].id)
+
+                if is_refresh:
+                    await self.answer_callback_query(cq_id, text="🔄 Данные обновлены!")
+                else:
+                    await self.answer_callback_query(cq_id)
+
+                from companion.services.timezone_service import TimezoneService
+
+                acc_obj = None
+                acc_id_for_kb = None
+                if acc_code not in ("default", "0"):
+                    try:
+                        acc_id = int(acc_code)
+                        acc_id_for_kb = acc_id
+                        stmt_acc = select(AccountSession).where(AccountSession.id == acc_id, AccountSession.user_id == db_user_id)
+                        res_acc = await session.execute(stmt_acc)
+                        acc_obj = res_acc.scalars().first()
+                    except (ValueError, TypeError):
+                        pass
+
+                if acc_obj:
+                    persona = await AccountService.ensure_account_persona(session, acc_obj)
+                else:
+                    stmt = select(Persona).where(Persona.user_id == db_user_id).order_by(Persona.id.asc())
+                    res = await session.execute(stmt)
+                    persona = res.scalars().first()
+                    if not persona:
+                        persona = Persona(user_id=db_user_id)
+                        session.add(persona)
+                        await session.commit()
+                        await session.refresh(persona)
+
+                weather = await TimezoneService.fetch_live_city_weather(persona.city or "Москва")
+                report = TimezoneService.format_city_detailed_report(persona, weather)
+                await self.edit_message(
+                    chat_id,
+                    msg_id,
+                    report,
+                    reply_markup=self.build_city_info_keyboard(account_id=acc_id_for_kb),
+                    parse_mode="HTML",
+                )
 
             elif data.startswith("legend_acc_"):
                 self._user_input_states.pop(user_tg_id, None)
@@ -4551,7 +4707,7 @@ class TelegramBotEngine:
                     p_count = p_stats.get("total_photos", 0)
                     text = self.format_legend_card(persona, account=None, photo_count=p_count)
                     await self.edit_message(
-                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=len(accounts) > 0, photo_count=p_count), parse_mode="HTML"
+                        chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=None, has_multiple_accounts=len(accounts) > 0, photo_count=p_count, city_name=persona.city), parse_mode="HTML"
                     )
                 else:
                     acc_id = int(acc_code)
@@ -4564,7 +4720,7 @@ class TelegramBotEngine:
                         p_count = p_stats.get("total_photos", 0)
                         text = self.format_legend_card(persona, account=acc, photo_count=p_count)
                         await self.edit_message(
-                            chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=len(accounts) > 1, photo_count=p_count), parse_mode="HTML"
+                            chat_id, msg_id, text, reply_markup=self.build_legend_keyboard(account_id=acc.id, has_multiple_accounts=len(accounts) > 1, photo_count=p_count, city_name=persona.city), parse_mode="HTML"
                         )
 
             elif data.startswith("legend_edit_name_age"):

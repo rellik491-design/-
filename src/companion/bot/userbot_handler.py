@@ -90,7 +90,7 @@ class UserbotHandler:
         for row in rows_desc:
             if row.sender_role == "user":
                 pending_reversed.append(row)
-            elif getattr(row, "processing_status", "PROCESSED") in ("NEW", "BATCHED", "FAILED"):
+            elif getattr(row, "processing_status", "PROCESSED") in ("NEW", "BATCHED", "FAILED", "QUEUED"):
                 pending_reversed.append(row)
             else:
                 break
@@ -193,31 +193,15 @@ class UserbotHandler:
 
         # Check if chat is paused by owner or previous meetup alert, or AI is turned off
         if contact.bot_paused or not getattr(contact, "ai_active", True):
-            # Auto-resume owner_manual_takeover if owner hasn't sent a message in > 15 minutes
+            # Auto-resume owner_manual_takeover immediately on incoming interlocutor reply!
+            # The owner sent a manual message earlier, and now the customer replied back,
+            # so the turn has passed back to the bot to smoothly continue the conversation.
             if contact.paused_reason == "owner_manual_takeover":
-                last_out = contact.last_outgoing_at
-                is_stale_owner_pause = False
-                if last_out:
-                    curr_tz = current_time if current_time.tzinfo is not None else current_time.replace(tzinfo=timezone.utc)
-                    out_tz = last_out if last_out.tzinfo is not None else last_out.replace(tzinfo=timezone.utc)
-                    diff_sec = abs((curr_tz - out_tz).total_seconds())
-                    if diff_sec > 900:  # > 15 minutes
-                        is_stale_owner_pause = True
-                else:
-                    is_stale_owner_pause = True
-
-                if is_stale_owner_pause:
-                    contact.bot_paused = False
-                    contact.ai_active = True
-                    contact.paused_reason = None
-                    await session.commit()
-                    logger.info("Auto-resumed bot in chat %s after owner manual takeover idle timeout (>15m)", sender_tg_id)
-                else:
-                    return {
-                        "action": "ignored",
-                        "reason": "chat_paused (owner_manual_takeover_recent)",
-                        "contact": contact,
-                    }
+                contact.bot_paused = False
+                contact.ai_active = True
+                contact.paused_reason = None
+                await session.commit()
+                logger.info("[USERBOT_HANDLER] Auto-resumed bot in chat %s on incoming interlocutor reply after manual takeover.", sender_tg_id)
             else:
                 return {
                     "action": "ignored",
@@ -511,7 +495,7 @@ class UserbotHandler:
             }
 
         for r in pending_unread_rows:
-            if getattr(r, "processing_status", "PROCESSED") in ("NEW", "BATCHED", "FAILED"):
+            if getattr(r, "processing_status", "PROCESSED") in ("NEW", "BATCHED", "FAILED", "QUEUED"):
                 r.processing_status = "PROCESSING"
                 r.batch_id = batch_id
         await session.commit()

@@ -2733,7 +2733,7 @@ class TelegramBotEngine:
                 contacts_to_unpause = (await session.execute(stmt_unpause)).scalars().all()
                 unpaused_cnt = 0
                 for c in contacts_to_unpause:
-                    if c.paused_reason in ("empty_model_response", "Model returned empty or null content", "ai_generation_exception", None) or "error" in (c.paused_reason or "").lower() or "lock" in (c.paused_reason or "").lower():
+                    if c.paused_reason in ("empty_model_response", "Model returned empty or null content", "ai_generation_exception", "owner_manual_takeover", None) or "error" in (c.paused_reason or "").lower() or "lock" in (c.paused_reason or "").lower():
                         c.bot_paused = False
                         c.ai_active = True
                         c.paused_reason = None

@@ -460,16 +460,7 @@ class BusinessChatBot:
             return {"action": "human_takeover_paused", "chat_id": chat_id}
 
         # 3. Message from male interlocutor -> Run standard processing pipeline with quest funnel
-        # Immediately mark all messages in this batch as read in Telegram (two checkmarks ✓✓)
         is_mock = (not simulate_delays) or (token in ("mock_token", "test_token"))
-        if token and not is_mock:
-            if incoming_batch:
-                for b_item in incoming_batch:
-                    b_msg_id = b_item.get("telegram_message_id") or b_item.get("message_id")
-                    if b_msg_id:
-                        await cls.read_business_message(token, connection_id, chat_id, b_msg_id)
-            elif message_id:
-                await cls.read_business_message(token, connection_id, chat_id, message_id)
 
         # Natural listening simulation if the batch contains incoming voice notes
         batch_voice_durations = [
@@ -548,6 +539,16 @@ class BusinessChatBot:
         action = res.get("action")
         if action in ("ignored", "sleeping_overnight", "silence", "paused_due_to_health", "paused_due_to_error") or not res.get("reply_text"):
             return res
+
+        # Mark messages in batch as read in Telegram ONLY when bot is actually replying
+        if token and not is_mock:
+            if incoming_batch:
+                for b_item in incoming_batch:
+                    b_msg_id = b_item.get("telegram_message_id") or b_item.get("message_id")
+                    if b_msg_id:
+                        await cls.read_business_message(token, connection_id, chat_id, b_msg_id)
+            elif message_id:
+                await cls.read_business_message(token, connection_id, chat_id, message_id)
 
         unread_batch_res = res.get("unread_batch") or []
         combined_transcribed = " | ".join(

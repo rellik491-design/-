@@ -452,15 +452,18 @@ class ContextManager:
 
         # Dynamic Language & Style Mirroring Block
         if dynamic_language_profile:
-            p_lang = getattr(dynamic_language_profile, "primary_language", "ru")
+            p_lang = getattr(dynamic_language_profile, "primary_language", "ru") or "ru"
             s_level = getattr(dynamic_language_profile, "slang_level", 0.5)
+            s_level = 0.5 if s_level is None else s_level
             p_level = getattr(dynamic_language_profile, "profanity_level", 0.0)
+            p_level = 0.0 if p_level is None else p_level
             translit = getattr(dynamic_language_profile, "transliteration", False)
-            script_val = getattr(dynamic_language_profile, "script", "cyrillic")
-            lang_name = "украинском" if p_lang == "uk" else ("английском" if p_lang == "en" else ("смешанном (суржик)" if p_lang == "mixed" else "русском"))
+            script_val = getattr(dynamic_language_profile, "script", "cyrillic") or "cyrillic"
+            p_lang_str = str(p_lang).lower()
+            lang_name = "украинском" if p_lang_str == "uk" else ("английском" if p_lang_str == "en" else ("смешанном (суржик)" if p_lang_str == "mixed" else "русском"))
             lang_block = (
                 f"[ДИНАМИЧЕСКИЙ ЯЗЫКОВОЙ ПРОФИЛЬ И ЗЕРКАЛИРОВАНИЕ СТИЛЯ]:\n"
-                f"• Язык ответа: строго на {lang_name} языке ({p_lang.upper()})! Не переводи речь собеседника на другой язык.\n"
+                f"• Язык ответа: строго на {lang_name} языке ({p_lang_str.upper()})! Не переводи речь собеседника на другой язык.\n"
                 f"• Уровень сленга: {s_level:.1f} (отражай непринужденный молодежный стиль, понимай 'гс', 'хз', 'мб', 'спс', 'пж').\n"
                 f"• Письменность: {'собеседник пишет латиницей (транслитом), но отвечай на чистой кириллице' if translit else ('латиница' if script_val == 'latin' else 'кириллица')}."
             )
@@ -468,9 +471,10 @@ class ContextManager:
 
         # Anti-Instagram / Contact Deflection Block
         if contact_deflection and getattr(contact_deflection, "deflection_required", False):
-            tone = getattr(contact_deflection, "suggested_deflection_tone", "playful_dodge")
-            c_type = getattr(contact_deflection, "contact_type", "instagram")
-            count = getattr(contact_deflection, "request_count", 1)
+            tone = getattr(contact_deflection, "suggested_deflection_tone", "playful_dodge") or "playful_dodge"
+            c_type = getattr(contact_deflection, "contact_type", "instagram") or "instagram"
+            count = getattr(contact_deflection, "request_count", 1) or 1
+            tone_str = str(tone).upper()
             deflection_instruction = (
                 f"[ПОВЕДЕНЧЕСКИЙ БЛОК: УВОД ОТ ЗАПРОСА КОНТАКТОВ / ИНСТАГРАМА (УРОВЕНЬ {count})]:\n"
                 f"• Запрос собеседника: {c_type} (попытка получить личные соцсети, ник или номер).\n"
@@ -478,7 +482,7 @@ class ContextManager:
                 f"• КАТЕГОРИЧЕСКИЙ ЗАПРЕТ РОБОТИЗИРОВАННЫХ ОТКАЗОВ: никаких «Я не даю инсту», «У меня нет инсты», «Политика запрещает»!\n"
                 f"• КАТЕГОРИЧЕСКИЙ ЗАПРЕТ ЛЖИВЫХ ОТМАЗОК: никаких «забыла пароль», «телефон сломался», «заблокировали»!\n"
                 f"• НЕ ОТВЕЧАЙ, ЕСТЬ ЛИ ИНСТАГРАМ: если спрашивают «у тебя вообще есть инста?» — уходи от прямого ответа без подтверждения или отрицания!\n"
-                f"• СТРАТЕГИЯ УВОДА (РЕЖИМ: {tone.upper()}):\n"
+                f"• СТРАТЕГИЯ УВОДА (РЕЖИМ: {tone_str}):\n"
                 f"  1. Отреагируй легко и естественно (с юмором, лёгким поддразниванием или флиртом: «ахах, а тебе зачем так срочно инста 😭», «куда ты меня уже тащишь ахах»).\n"
                 f"  2. НЕ отвечай на сам запрос контакта.\n"
                 f"  3. Перенаправь внимание на текущий разговор в Telegram («давай сначала тут нормально пообщаемся 😌», «не торопись, мы ещё тут не договорили»).\n"

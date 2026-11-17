@@ -914,7 +914,8 @@ class MeetingPlannerService:
                 lines.append("• ВНИМАНИЕ: Собеседник не хочет на квест! Предложи ТОЛЬКО кино («тогда давай в кино на что-нибудь интересное»). Не повторяй квест!")
 
         elif resolution.stage in ("OPTIONS_DISCUSSED", "PREFERENCE_DISCOVERY") or resolution.meeting_state in (STATE_ACTIVITY_CONFIRMED, STATE_VENUE_SELECTION):
-            lines.append(f"• ФОРМАТ СОГЛАСОВАН: {resolution.activity_type.upper()}.")
+            act_type = str(resolution.activity_type or "кино или квест").upper()
+            lines.append(f"• ФОРМАТ СОГЛАСОВАН: {act_type}.")
             if resolution.selected_options:
                 opt_lines = []
                 for idx, opt in enumerate(resolution.selected_options[:3], 1):

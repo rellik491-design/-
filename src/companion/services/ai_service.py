@@ -393,9 +393,9 @@ class AIService:
 
         # Anti-Instagram / Contact Deflection behavioral section
         if contact_deflection and getattr(contact_deflection, "deflection_required", False):
-            tone = getattr(contact_deflection, "suggested_deflection_tone", "playful_dodge")
-            c_type = getattr(contact_deflection, "contact_type", "instagram")
-            count = getattr(contact_deflection, "request_count", 1)
+            tone = getattr(contact_deflection, "suggested_deflection_tone", "playful_dodge") or "playful_dodge"
+            c_type = getattr(contact_deflection, "contact_type", "instagram") or "instagram"
+            count = getattr(contact_deflection, "request_count", 1) or 1
             prompt += f"""
 
 18. АНТИ-ИНСТАГРАМ И УВОД ОТ ЗАПРОСА КОНТАКТОВ (ANTI-INSTAGRAM / PERSONAL CONTACT DEFLECTION):

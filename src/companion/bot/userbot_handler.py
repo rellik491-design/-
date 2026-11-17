@@ -766,6 +766,7 @@ class UserbotHandler:
                     persona, contact, history, ai_turn_input
                 )
         except Exception as ai_err:
+            logger.exception("[USERBOT_HANDLER] Exception during AI reply generation: %s", ai_err)
             # Mark batch as FAILED so messages are never lost and can be recovered
             for r in pending_unread_rows:
                 if getattr(r, "batch_id", None) == batch_id:

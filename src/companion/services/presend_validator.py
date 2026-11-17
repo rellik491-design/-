@@ -64,7 +64,7 @@ class PreSendValidator:
             text = MeetingPlannerService.heal_accidental_yes(text, resolution)
 
         # Check 1 & 2: Target author must be USER
-        if target_sender_type.upper() in ("BOT", "ASSISTANT", "SELF"):
+        if (target_sender_type or "").upper() in ("BOT", "ASSISTANT", "SELF"):
             logger.error("[PRESEND_VALIDATOR] FAILED Check 1-2: Target author is BOT/ASSISTANT (%s)", target_sender_type)
             return False, "target_is_bot", ""
 

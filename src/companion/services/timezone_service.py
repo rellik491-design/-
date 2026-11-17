@@ -21,6 +21,162 @@ class GeoLocationInfo:
     aliases: List[str] = field(default_factory=list)
 
 
+# Canonical country dictionary with country codes and primary timezones
+KNOWN_COUNTRIES: Dict[str, Tuple[str, str, str]] = {
+    # alias.lower(): (canonical_country_name, country_code, default_tz)
+    "usa": ("США", "US", "America/New_York"),
+    "сша": ("США", "US", "America/New_York"),
+    "us": ("США", "US", "America/New_York"),
+    "u.s.": ("США", "US", "America/New_York"),
+    "u.s.a.": ("США", "US", "America/New_York"),
+    "united states": ("США", "US", "America/New_York"),
+    "united states of america": ("США", "US", "America/New_York"),
+    "соединенные штаты": ("США", "US", "America/New_York"),
+    "соединенные штаты америки": ("США", "US", "America/New_York"),
+    "штаты": ("США", "US", "America/New_York"),
+    "америка": ("США", "US", "America/New_York"),
+    "uk": ("Великобритания", "GB", "Europe/London"),
+    "u.k.": ("Великобритания", "GB", "Europe/London"),
+    "great britain": ("Великобритания", "GB", "Europe/London"),
+    "united kingdom": ("Великобритания", "GB", "Europe/London"),
+    "великобритания": ("Великобритания", "GB", "Europe/London"),
+    "британия": ("Великобритания", "GB", "Europe/London"),
+    "англия": ("Великобритания", "GB", "Europe/London"),
+    "england": ("Великобритания", "GB", "Europe/London"),
+    "canada": ("Канада", "CA", "America/Toronto"),
+    "канада": ("Канада", "CA", "America/Toronto"),
+    "россия": ("Россия", "RU", "Europe/Moscow"),
+    "рф": ("Россия", "RU", "Europe/Moscow"),
+    "russia": ("Россия", "RU", "Europe/Moscow"),
+    "russian federation": ("Россия", "RU", "Europe/Moscow"),
+    "украина": ("Украина", "UA", "Europe/Kyiv"),
+    "ukraine": ("Украина", "UA", "Europe/Kyiv"),
+    "беларусь": ("Беларусь", "BY", "Europe/Minsk"),
+    "belarus": ("Беларусь", "BY", "Europe/Minsk"),
+    "белоруссия": ("Беларусь", "BY", "Europe/Minsk"),
+    "казахстан": ("Казахстан", "KZ", "Asia/Almaty"),
+    "kazakhstan": ("Казахстан", "KZ", "Asia/Almaty"),
+    "германия": ("Германия", "DE", "Europe/Berlin"),
+    "germany": ("Германия", "DE", "Europe/Berlin"),
+    "deutschland": ("Германия", "DE", "Europe/Berlin"),
+    "франция": ("Франция", "FR", "Europe/Paris"),
+    "france": ("Франция", "FR", "Europe/Paris"),
+    "испания": ("Испания", "ES", "Europe/Madrid"),
+    "spain": ("Испания", "ES", "Europe/Madrid"),
+    "италия": ("Италия", "IT", "Europe/Rome"),
+    "italy": ("Италия", "IT", "Europe/Rome"),
+    "польша": ("Польша", "PL", "Europe/Warsaw"),
+    "poland": ("Польша", "PL", "Europe/Warsaw"),
+    "оаэ": ("ОАЭ", "AE", "Asia/Dubai"),
+    "uae": ("ОАЭ", "AE", "Asia/Dubai"),
+    "эмираты": ("ОАЭ", "AE", "Asia/Dubai"),
+    "united arab emirates": ("ОАЭ", "AE", "Asia/Dubai"),
+    "турция": ("Турция", "TR", "Europe/Istanbul"),
+    "turkey": ("Турция", "TR", "Europe/Istanbul"),
+    "грузия": ("Грузия", "GE", "Asia/Tbilisi"),
+    "georgia": ("Грузия", "GE", "Asia/Tbilisi"),
+    "армения": ("Армения", "AM", "Asia/Yerevan"),
+    "armenia": ("Армения", "AM", "Asia/Yerevan"),
+    "япония": ("Япония", "JP", "Asia/Tokyo"),
+    "japan": ("Япония", "JP", "Asia/Tokyo"),
+    "таиланд": ("Таиланд", "TH", "Asia/Bangkok"),
+    "thailand": ("Таиланд", "TH", "Asia/Bangkok"),
+    "тайланд": ("Таиланд", "TH", "Asia/Bangkok"),
+    "индонезия": ("Индонезия", "ID", "Asia/Makassar"),
+    "indonesia": ("Индонезия", "ID", "Asia/Makassar"),
+    "австралия": ("Австралия", "AU", "Australia/Sydney"),
+    "australia": ("Австралия", "AU", "Australia/Sydney"),
+    "чехия": ("Чехия", "CZ", "Europe/Prague"),
+    "czech": ("Чехия", "CZ", "Europe/Prague"),
+    "австрия": ("Австрия", "AT", "Europe/Vienna"),
+    "austria": ("Австрия", "AT", "Europe/Vienna"),
+    "нидерланды": ("Нидерланды", "NL", "Europe/Amsterdam"),
+    "netherlands": ("Нидерланды", "NL", "Europe/Amsterdam"),
+    "голландия": ("Нидерланды", "NL", "Europe/Amsterdam"),
+    "швейцария": ("Швейцария", "CH", "Europe/Zurich"),
+    "switzerland": ("Швейцария", "CH", "Europe/Zurich"),
+    "швеция": ("Швеция", "SE", "Europe/Stockholm"),
+    "sweden": ("Швеция", "SE", "Europe/Stockholm"),
+    "норвегия": ("Норвегия", "NO", "Europe/Oslo"),
+    "norway": ("Норвегия", "NO", "Europe/Oslo"),
+    "финляндия": ("Финляндия", "FI", "Europe/Helsinki"),
+    "finland": ("Финляндия", "FI", "Europe/Helsinki"),
+    "дания": ("Дания", "DK", "Europe/Copenhagen"),
+    "denmark": ("Дания", "DK", "Europe/Copenhagen"),
+    "португалия": ("Португалия", "PT", "Europe/Lisbon"),
+    "portugal": ("Португалия", "PT", "Europe/Lisbon"),
+}
+
+# Comprehensive US States with abbreviations, English names, Russian names, and default IANA timezones
+US_STATES_DATA: Dict[str, Tuple[str, str, str]] = {
+    # code: (english_name, russian_name, iana_tz)
+    "AL": ("Alabama", "Алабама", "America/Chicago"),
+    "AK": ("Alaska", "Аляска", "America/Anchorage"),
+    "AZ": ("Arizona", "Аризона", "America/Phoenix"),
+    "AR": ("Arkansas", "Арканзас", "America/Chicago"),
+    "CA": ("California", "Калифорния", "America/Los_Angeles"),
+    "CO": ("Colorado", "Колорадо", "America/Denver"),
+    "CT": ("Connecticut", "Коннектикут", "America/New_York"),
+    "DE": ("Delaware", "Делавэр", "America/New_York"),
+    "FL": ("Florida", "Флорида", "America/New_York"),
+    "GA": ("Georgia", "Джорджия", "America/New_York"),
+    "HI": ("Hawaii", "Гавайи", "Pacific/Honolulu"),
+    "ID": ("Idaho", "Айдахо", "America/Boise"),
+    "IL": ("Illinois", "Иллинойс", "America/Chicago"),
+    "IN": ("Indiana", "Индиана", "America/Indiana/Indianapolis"),
+    "IA": ("Iowa", "Айова", "America/Chicago"),
+    "KS": ("Kansas", "Канзас", "America/Chicago"),
+    "KY": ("Kentucky", "Кентукки", "America/New_York"),
+    "LA": ("Louisiana", "Луизиана", "America/Chicago"),
+    "ME": ("Maine", "Мэн", "America/New_York"),
+    "MD": ("Maryland", "Мэриленд", "America/New_York"),
+    "MA": ("Massachusetts", "Массачусетс", "America/New_York"),
+    "MI": ("Michigan", "Мичиган", "America/Detroit"),
+    "MN": ("Minnesota", "Миннесота", "America/Chicago"),
+    "MS": ("Mississippi", "Миссисипи", "America/Chicago"),
+    "MO": ("Missouri", "Миссури", "America/Chicago"),
+    "MT": ("Montana", "Монтана", "America/Denver"),
+    "NE": ("Nebraska", "Небраска", "America/Chicago"),
+    "NV": ("Nevada", "Невада", "America/Los_Angeles"),
+    "NH": ("New Hampshire", "Нью-Гэмпшир", "America/New_York"),
+    "NJ": ("New Jersey", "Нью-Джерси", "America/New_York"),
+    "NM": ("New Mexico", "Нью-Мексико", "America/Denver"),
+    "NY": ("New York", "Нью-Йорк", "America/New_York"),
+    "NC": ("North Carolina", "Северная Каролина", "America/New_York"),
+    "ND": ("North Dakota", "Северная Дакота", "America/Chicago"),
+    "OH": ("Ohio", "Огайо", "America/New_York"),
+    "OK": ("Oklahoma", "Оклахома", "America/Chicago"),
+    "OR": ("Oregon", "Орегон", "America/Los_Angeles"),
+    "PA": ("Pennsylvania", "Пенсильвания", "America/New_York"),
+    "RI": ("Rhode Island", "Род-Айленд", "America/New_York"),
+    "SC": ("South Carolina", "Южная Каролина", "America/New_York"),
+    "SD": ("South Dakota", "Южная Дакота", "America/Chicago"),
+    "TN": ("Tennessee", "Теннесси", "America/Chicago"),
+    "TX": ("Texas", "Техас", "America/Chicago"),
+    "UT": ("Utah", "Юта", "America/Denver"),
+    "VT": ("Vermont", "Вермонт", "America/New_York"),
+    "VA": ("Virginia", "Вирджиния", "America/New_York"),
+    "WA": ("Washington", "Вашингтон", "America/Los_Angeles"),
+    "WV": ("West Virginia", "Западная Вирджиния", "America/New_York"),
+    "WI": ("Wisconsin", "Висконсин", "America/Chicago"),
+    "WY": ("Wyoming", "Вайоминг", "America/Denver"),
+    "DC": ("District of Columbia", "Округ Колумбия", "America/New_York"),
+}
+
+STATE_LOOKUP_MAP: Dict[str, Tuple[str, str, str]] = {}
+
+def _build_state_index():
+    for code, (eng, ru, tz) in US_STATES_DATA.items():
+        val = (eng, ru, tz)
+        STATE_LOOKUP_MAP[code.lower()] = val
+        STATE_LOOKUP_MAP[eng.lower()] = val
+        STATE_LOOKUP_MAP[eng.lower().replace("-", " ")] = val
+        STATE_LOOKUP_MAP[ru.lower()] = val
+        STATE_LOOKUP_MAP[ru.lower().replace("-", " ")] = val
+
+_build_state_index()
+
+
 # Comprehensive database of cities, countries, regions, and canonical IANA timezones.
 # Covers CIS, Europe, North America, Middle East, Asia, and Oceania.
 # Supports automatic Daylight Saving Time (DST) transitions via IANA/pytz.
@@ -88,6 +244,254 @@ CANONICAL_GEO_DATABASE: List[GeoLocationInfo] = [
         region="Иллинойс",
         timezone="America/Chicago",
         aliases=["чикаго", "chicago", "иллинойс", "illinois"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Портленд",
+        country="США",
+        country_code="US",
+        region="Орегон",
+        timezone="America/Los_Angeles",
+        aliases=["портленд", "portland", "portland oregon", "portland or", "портленд орегон", "портленд сша", "орегон", "oregon"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Шарлотт",
+        country="США",
+        country_code="US",
+        region="Северная Каролина",
+        timezone="America/New_York",
+        aliases=["шарлотт", "шарлотта", "charlotte", "charlotte nc", "шарлотт сша", "северная каролина", "north carolina"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Сиэтл",
+        country="США",
+        country_code="US",
+        region="Вашингтон",
+        timezone="America/Los_Angeles",
+        aliases=["сиэтл", "сиетл", "seattle", "seattle wa", "вашингтон штат", "сиэтл сша"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Остин",
+        country="США",
+        country_code="US",
+        region="Техас",
+        timezone="America/Chicago",
+        aliases=["остин", "austin", "austin tx", "остин техас"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Хьюстон",
+        country="США",
+        country_code="US",
+        region="Техас",
+        timezone="America/Chicago",
+        aliases=["хьюстон", "houston", "houston tx", "хьюстон техас"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Даллас",
+        country="США",
+        country_code="US",
+        region="Техас",
+        timezone="America/Chicago",
+        aliases=["даллас", "dallas", "dallas tx", "даллас техас"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Сан-Антонио",
+        country="США",
+        country_code="US",
+        region="Техас",
+        timezone="America/Chicago",
+        aliases=["сан-антонио", "сан антонио", "san antonio", "san antonio tx"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Сан-Диего",
+        country="США",
+        country_code="US",
+        region="Калифорния",
+        timezone="America/Los_Angeles",
+        aliases=["сан-диего", "сан диего", "san diego", "san diego ca"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Сан-Хосе",
+        country="США",
+        country_code="US",
+        region="Калифорния",
+        timezone="America/Los_Angeles",
+        aliases=["сан-хосе", "сан хосе", "san jose", "кремниевая долина", "silicon valley"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Филадельфия",
+        country="США",
+        country_code="US",
+        region="Пенсильвания",
+        timezone="America/New_York",
+        aliases=["филадельфия", "philadelphia", "philly", "филли", "пенсильвания", "pennsylvania"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Атланта",
+        country="США",
+        country_code="US",
+        region="Джорджия",
+        timezone="America/New_York",
+        aliases=["атланта", "atlanta", "atlanta ga", "джорджия", "georgia us"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Финикс",
+        country="США",
+        country_code="US",
+        region="Аризона",
+        timezone="America/Phoenix",
+        aliases=["финикс", "феникс", "phoenix", "phoenix az", "аризона", "arizona"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Денвер",
+        country="США",
+        country_code="US",
+        region="Колорадо",
+        timezone="America/Denver",
+        aliases=["денвер", "denver", "denver co", "колорадо", "colorado"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Лас-Вегас",
+        country="США",
+        country_code="US",
+        region="Невада",
+        timezone="America/Los_Angeles",
+        aliases=["лас-вегас", "лас вегас", "вегас", "las vegas", "vegas", "невада", "nevada"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Детройт",
+        country="США",
+        country_code="US",
+        region="Мичиган",
+        timezone="America/Detroit",
+        aliases=["детройт", "detroit", "мичиган", "michigan"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Нэшвилл",
+        country="США",
+        country_code="US",
+        region="Теннесси",
+        timezone="America/Chicago",
+        aliases=["нэшвилл", "нешвилл", "nashville", "теннесси", "tennessee"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Орландо",
+        country="США",
+        country_code="US",
+        region="Флорида",
+        timezone="America/New_York",
+        aliases=["орландо", "orlando", "диснеи"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Тампа",
+        country="США",
+        country_code="US",
+        region="Флорида",
+        timezone="America/New_York",
+        aliases=["тампа", "tampa", "тампа-бэй", "tampa bay"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Миннеаполис",
+        country="США",
+        country_code="US",
+        region="Миннесота",
+        timezone="America/Chicago",
+        aliases=["миннеаполис", "minneapolis", "миннесота", "minnesota"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Новый Орлеан",
+        country="США",
+        country_code="US",
+        region="Луизиана",
+        timezone="America/Chicago",
+        aliases=["новый орлеан", "новый-орлеан", "new orleans", "луизиана", "louisiana"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Кливленд",
+        country="США",
+        country_code="US",
+        region="Огайо",
+        timezone="America/New_York",
+        aliases=["кливленд", "cleveland", "огайо", "ohio"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Питтсбург",
+        country="США",
+        country_code="US",
+        region="Пенсильвания",
+        timezone="America/New_York",
+        aliases=["питтсбург", "питсбург", "pittsburgh"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Сакраменто",
+        country="США",
+        country_code="US",
+        region="Калифорния",
+        timezone="America/Los_Angeles",
+        aliases=["сакраменто", "sacramento"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Солт-Лейк-Сити",
+        country="США",
+        country_code="US",
+        region="Юта",
+        timezone="America/Denver",
+        aliases=["солт-лейк-сити", "солт лейк сити", "salt lake city", "юта", "utah"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Гонолулу",
+        country="США",
+        country_code="US",
+        region="Гавайи",
+        timezone="Pacific/Honolulu",
+        aliases=["гонолулу", "honolulu", "гавайи", "hawaii"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Канзас-Сити",
+        country="США",
+        country_code="US",
+        region="Миссури",
+        timezone="America/Chicago",
+        aliases=["канзас-сити", "канзас сити", "kansas city", "миссури", "missouri"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Балтимор",
+        country="США",
+        country_code="US",
+        region="Мэриленд",
+        timezone="America/New_York",
+        aliases=["балтимор", "baltimore", "мэриленд", "maryland"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Милуоки",
+        country="США",
+        country_code="US",
+        region="Висконсин",
+        timezone="America/Chicago",
+        aliases=["милуоки", "milwaukee", "висконсин", "wisconsin"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Индианаполис",
+        country="США",
+        country_code="US",
+        region="Индиана",
+        timezone="America/Indiana/Indianapolis",
+        aliases=["индианаполис", "indianapolis", "индиана", "indiana"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Колумбус",
+        country="США",
+        country_code="US",
+        region="Огайо",
+        timezone="America/New_York",
+        aliases=["колумбус", "columbus"],
+    ),
+    GeoLocationInfo(
+        canonical_city="Роли",
+        country="США",
+        country_code="US",
+        region="Северная Каролина",
+        timezone="America/New_York",
+        aliases=["роли", "raleigh"],
     ),
     GeoLocationInfo(
         canonical_city="Торонто",
@@ -909,9 +1313,11 @@ class TimezoneService:
     @classmethod
     def resolve_timezone_for_city(cls, city: Optional[str], country: Optional[str] = None) -> str:
         """
-        Resolves the IANA timezone name for a given city or region.
+        Resolves the IANA timezone name for a given city, state, or country.
         Never guesses timezone based on interface language.
         Accurately maps:
+          Portland -> America/Los_Angeles
+          Charlotte -> America/New_York
           Los Angeles / Лос-Анджелес / LA -> America/Los_Angeles
           London / Лондон -> Europe/London
           New York / Нью-Йорк -> America/New_York
@@ -939,39 +1345,124 @@ class TimezoneService:
         if geo:
             return geo.timezone
 
-        # 3. Check country if provided
+        # 3. Check US States
+        if cleaned in STATE_LOOKUP_MAP:
+            return STATE_LOOKUP_MAP[cleaned][2]
+        for tok in re.split(r"[,;/\s]+", cleaned):
+            t_low = tok.strip(".")
+            if t_low in STATE_LOOKUP_MAP:
+                return STATE_LOOKUP_MAP[t_low][2]
+
+        # 4. Check known countries
+        if cleaned in KNOWN_COUNTRIES:
+            return KNOWN_COUNTRIES[cleaned][2]
+
         if country:
             country_clean = cls.clean_geographic_string(country).strip().lower()
             geo_c = cls.get_geo_info(country_clean)
             if geo_c:
                 return geo_c.timezone
+            if country_clean in KNOWN_COUNTRIES:
+                return KNOWN_COUNTRIES[country_clean][2]
 
-        # 4. Direct IANA validation via pytz (e.g. if user passed valid IANA string)
+        # 5. Direct IANA validation via pytz (e.g. if user passed valid IANA string)
         try:
             pytz.timezone(city)
             return city
         except Exception:
             pass
 
+        # 6. Fallback: if Latin letters -> America/New_York (US default), else Europe/Moscow
+        is_latin = any(c.isascii() and c.isalpha() for c in city) and not any('а' <= c <= 'я' or 'А' <= c <= 'Я' for c in city)
+        if is_latin:
+            return "America/New_York"
+
         return "Europe/Moscow"
+
+    @classmethod
+    def resolve_country_and_region(
+        cls,
+        city: Optional[str],
+        country: Optional[str] = None,
+        region: Optional[str] = None,
+        timezone_name: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        """
+        Dynamically and smartly validates and resolves (country, region).
+        Guarantees that US or international cities are NEVER represented as 'Россия'.
+        """
+        clean_city = cls.clean_geographic_string(city).strip()
+        geo = cls.get_geo_info(clean_city)
+        if geo:
+            resolved_country = country if country and country != "Россия" else geo.country
+            resolved_region = region or geo.region
+            return resolved_country, resolved_region
+
+        # Check if country passed is a valid non-Russian country
+        c_clean = cls.clean_geographic_string(country).strip().lower()
+        if c_clean in KNOWN_COUNTRIES and KNOWN_COUNTRIES[c_clean][0] != "Россия":
+            return KNOWN_COUNTRIES[c_clean][0], region or ""
+
+        # Check timezone prefix
+        tz = timezone_name or ""
+        if tz.startswith("America/"):
+            if any(c in tz for c in ("Toronto", "Montreal", "Vancouver", "Edmonton", "Winnipeg")):
+                return "Канада", region or ""
+            return "США", region or ""
+        elif tz.startswith("Europe/London"):
+            return "Великобритания", region or "Англия"
+        elif tz.startswith("Europe/Kyiv"):
+            return "Украина", region or ""
+
+        # Check if city is in Latin
+        if any(c.isascii() and c.isalpha() for c in clean_city) and not any('а' <= c <= 'я' or 'А' <= c <= 'Я' for c in clean_city):
+            if clean_city.lower() in ("moscow", "saint petersburg", "spb", "kazan", "sochi", "samara", "novosibirsk"):
+                return "Россия", region or ""
+            return "США", region or ""
+
+        final_country = country or "Россия"
+        final_region = region or ""
+        return final_country, final_region
+
+    @classmethod
+    def is_foreign_city(cls, city: Optional[str]) -> bool:
+        """Checks whether the city is a non-Russian foreign city."""
+        if not city:
+            return False
+        c = city.strip().lower()
+        if any(c.isascii() and c.isalpha() for c in c) and not any('а' <= c <= 'я' or 'А' <= c <= 'Я' for c in c):
+            if c not in ("moscow", "saint petersburg", "spb", "kazan", "sochi", "samara", "novosibirsk"):
+                return True
+        geo = cls.get_geo_info(c)
+        if geo and geo.country != "Россия":
+            return True
+        return False
 
     @classmethod
     def parse_and_clean_location(cls, raw_text: str) -> Dict[str, Any]:
         """
         Strictly separates geography and timezone from user/AI input.
-        Never puts timezone or continent into city/district.
+        Never puts timezone, continent, or country name into city/district.
         Derives canonical city, country, region, and IANA timezone.
-        Example:
-          'Лос Анджелес, Уест-Голливуд (Europe/Moscow)'
-          -> {
-               'city': 'Лос-Анджелес',
-               'district': 'Уэст-Голливуд',
+        Examples:
+          'Portland, USA' -> {
+               'city': 'Portland',
+               'district': '',
                'country': 'США',
                'country_code': 'US',
-               'region': 'Калифорния',
+               'region': 'Орегон',
                'timezone_name': 'America/Los_Angeles',
                'timezone_source': 'AUTO'
-             }
+          }
+          'Charlotte, USA' -> {
+               'city': 'Charlotte',
+               'district': '',
+               'country': 'США',
+               'country_code': 'US',
+               'region': 'Северная Каролина',
+               'timezone_name': 'America/New_York',
+               'timezone_source': 'AUTO'
+          }
         """
         if not raw_text:
             return {
@@ -986,26 +1477,67 @@ class TimezoneService:
 
         cleaned = cls.clean_geographic_string(raw_text)
 
-        parts = [p.strip() for p in cleaned.split(",") if p.strip()]
-        raw_city = parts[0] if parts else "Москва"
-        raw_district = parts[1] if len(parts) > 1 else ""
+        # Split into tokens by comma or semicolon
+        raw_tokens = [t.strip() for t in re.split(r"[,;]+", cleaned) if t.strip()]
 
-        # Normalize city via Geo Registry
+        extracted_country: Optional[str] = None
+        extracted_country_code: Optional[str] = None
+        suggested_tz: Optional[str] = None
+
+        # 1. Detect and extract country token
+        tokens_without_country = []
+        for token in raw_tokens:
+            t_low = token.lower().strip(".")
+            if t_low in KNOWN_COUNTRIES:
+                c_name, c_code, c_tz = KNOWN_COUNTRIES[t_low]
+                extracted_country = c_name
+                extracted_country_code = c_code
+                suggested_tz = c_tz
+            else:
+                tokens_without_country.append(token)
+
+        # 2. Detect and extract US state / region token
+        extracted_region: Optional[str] = None
+        remaining_tokens = []
+        for token in tokens_without_country:
+            t_low = token.lower().strip(".")
+            if t_low in STATE_LOOKUP_MAP:
+                eng_name, ru_name, s_tz = STATE_LOOKUP_MAP[t_low]
+                extracted_region = ru_name
+                extracted_country = "США"
+                extracted_country_code = "US"
+                suggested_tz = s_tz
+            else:
+                remaining_tokens.append(token)
+
+        raw_city = remaining_tokens[0] if remaining_tokens else ""
+        raw_district = remaining_tokens[1] if len(remaining_tokens) > 1 else ""
+
+        if not raw_city and extracted_region:
+            raw_city = extracted_region
+            extracted_region = None
+        elif not raw_city:
+            raw_city = "Москва"
+
+        # Check Geo Registry for city
         geo = cls.get_geo_info(raw_city)
         if not geo and raw_district:
             # Maybe user entered 'Уэст-Голливуд, Лос-Анджелес'
-            geo = cls.get_geo_info(raw_district)
-            if geo:
+            geo_d = cls.get_geo_info(raw_district)
+            if geo_d:
+                geo = geo_d
                 raw_city, raw_district = raw_district, raw_city
 
+        cleaned_district = raw_district
         if geo:
-            canonical_city = geo.canonical_city
-            # If user entered in English (e.g. 'London'), preserve English form if city matches
-            if raw_city.lower() in ("london", "new york", "los angeles", "paris", "berlin", "warsaw"):
+            # Preserve English casing if user entered in Latin
+            is_city_latin = any(c.isascii() and c.isalpha() for c in raw_city) and not any('а' <= c <= 'я' or 'А' <= c <= 'Я' for c in raw_city)
+            if is_city_latin:
                 canonical_city = raw_city.title()
-            
-            # Clean district: normalize if known typo e.g. "Уест-Голливуд" -> "Уэст-Голливуд"
-            cleaned_district = raw_district
+            else:
+                canonical_city = geo.canonical_city
+
+            # Normalize known district aliases
             if raw_district:
                 d_low = raw_district.lower().replace("-", " ")
                 if "уест" in d_low or "west" in d_low:
@@ -1015,17 +1547,53 @@ class TimezoneService:
                 elif "васька" in d_low:
                     cleaned_district = "Васильевский остров"
 
-            country = geo.country
-            country_code = geo.country_code
-            region = geo.region
+            country = extracted_country or geo.country
+            country_code = extracted_country_code or geo.country_code
+            region = extracted_region or geo.region
             tz_name = geo.timezone
         else:
             canonical_city = raw_city
-            cleaned_district = raw_district
-            country = "Россия"
-            country_code = "RU"
-            region = None
-            tz_name = cls.resolve_timezone_for_city(raw_city)
+            # If user typed Latin city (e.g. 'Portland', 'Charlotte')
+            is_city_latin = any(c.isascii() and c.isalpha() for c in raw_city) and not any('а' <= c <= 'я' or 'А' <= c <= 'Я' for c in raw_city)
+            if is_city_latin:
+                canonical_city = raw_city.title()
+
+            if extracted_country:
+                country = extracted_country
+                country_code = extracted_country_code or "US"
+                region = extracted_region
+                tz_name = suggested_tz or cls.resolve_timezone_for_city(raw_city, country)
+            elif extracted_region:
+                country = "США"
+                country_code = "US"
+                region = extracted_region
+                tz_name = suggested_tz or "America/New_York"
+            elif is_city_latin:
+                # Latin city not recognized in database: default to US, NOT Russia!
+                country = "США"
+                country_code = "US"
+                region = None
+                tz_name = cls.resolve_timezone_for_city(raw_city)
+                if tz_name == "Europe/Moscow":
+                    tz_name = "America/New_York"
+            else:
+                country = "Россия"
+                country_code = "RU"
+                region = None
+                tz_name = cls.resolve_timezone_for_city(raw_city)
+
+        # STRICT POST-PROCESSING: Guarantee district NEVER contains country or region name!
+        if cleaned_district:
+            cd_low = cleaned_district.lower().strip(".")
+            if (
+                cd_low in KNOWN_COUNTRIES
+                or cd_low in STATE_LOOKUP_MAP
+                or (region and cd_low == region.lower())
+                or (country and cd_low == country.lower())
+                or cd_low == canonical_city.lower()
+                or cd_low in ("usa", "сша", "us", "uk", "россия", "украина", "united states")
+            ):
+                cleaned_district = ""
 
         return {
             "city": canonical_city,
@@ -1464,10 +2032,21 @@ class TimezoneService:
                 or TIMEZONE_IDENTIFIER_PATTERN.search(raw_district)
             )
 
+            # Check if district contains country name (e.g. district='USA' or 'США')
+            district_is_country = raw_district.strip().lower() in ("usa", "сша", "us", "uk", "россия", "украина", "united states", "russia")
+
             geo = cls.get_geo_info(raw_city)
 
-            # Check if geography or timezone or region needs update
-            needs_geo_sync = False
+            # Check if foreign city is marked as Russia or Europe/Moscow
+            is_foreign = (
+                cls.is_foreign_city(raw_city)
+                or (p.timezone_name and p.timezone_name.startswith("America/"))
+                or district_is_country
+                or raw_city.lower() in ("portland", "charlotte", "seattle", "austin", "houston", "dallas", "los angeles", "new york", "london", "paris", "berlin", "warsaw")
+            )
+            wrong_russia = is_foreign and (p.country == "Россия" or p.timezone_name == "Europe/Moscow" or not getattr(p, "region", None))
+
+            needs_geo_sync = has_leak or district_is_country or wrong_russia
             if geo:
                 if (p.timezone_name != geo.timezone and getattr(p, "timezone_source", "AUTO") == "AUTO"):
                     needs_geo_sync = True
@@ -1475,7 +2054,9 @@ class TimezoneService:
                     needs_geo_sync = True
                 if (not getattr(p, "region", None) and geo.region):
                     needs_geo_sync = True
-                if (p.city != geo.canonical_city and raw_city.lower() not in ("london", "new york", "los angeles", "paris", "berlin", "warsaw")):
+                if (p.city != geo.canonical_city and raw_city.lower() not in (
+                    "london", "new york", "los angeles", "paris", "berlin", "warsaw", "portland", "charlotte", "seattle", "austin"
+                )):
                     needs_geo_sync = True
 
             # 2. Normalize sleep schedule
@@ -1502,8 +2083,9 @@ class TimezoneService:
                 if p.city != cleaned_data["city"]:
                     p.city = cleaned_data["city"]
                     changed = True
-                if cleaned_data["district"] and p.district != cleaned_data["district"]:
-                    p.district = cleaned_data["district"]
+                new_district = cleaned_data.get("district") or ""
+                if (p.district or "") != new_district:
+                    p.district = new_district
                     changed = True
                 if p.country != cleaned_data["country"]:
                     p.country = cleaned_data["country"]

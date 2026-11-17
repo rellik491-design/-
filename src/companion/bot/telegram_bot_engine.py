@@ -993,7 +993,7 @@ class TelegramBotEngine:
         name = persona.name or "Алина"
         age = persona.age or 22
         city = persona.city or "Москва"
-        district = getattr(persona, "district", "") or "центр / ЦАО"
+        district = getattr(persona, "district", "") or ""
         birth_city = getattr(persona, "birth_city", "") or "Самара"
         move_reason = getattr(persona, "move_reason", "") or "Поступила в университет на дизайн и осталась жить"
         years_in_city = getattr(persona, "years_in_city", "") or "Живу тут около 4 лет"
@@ -1010,16 +1010,32 @@ class TelegramBotEngine:
 
         clean_city = TimezoneService.clean_geographic_string(city)
         clean_dist = TimezoneService.clean_geographic_string(district) if district else ""
+        if clean_dist:
+            cd_low = clean_dist.lower().strip(".")
+            if cd_low in ("usa", "сша", "us", "uk", "россия", "украина", "united states") or cd_low == clean_city.lower():
+                clean_dist = ""
         city_dist_str = f"{clean_city}, {clean_dist}" if clean_dist else clean_city
 
-        country = getattr(persona, "country", "") or "Россия"
-        region = getattr(persona, "region", "") or ""
-        clean_country = TimezoneService.clean_geographic_string(country)
-        clean_region = TimezoneService.clean_geographic_string(region) if region else ""
+        raw_country = getattr(persona, "country", "") or ""
+        raw_region = getattr(persona, "region", "") or ""
+
+        clean_country, clean_region = TimezoneService.resolve_country_and_region(
+            city=clean_city,
+            country=raw_country,
+            region=raw_region,
+            timezone_name=tz_name,
+        )
+
         if clean_region and clean_country and clean_region.lower() != clean_country.lower():
             country_region_str = f"{clean_country}, {clean_region}"
         else:
             country_region_str = clean_country or clean_region or "Россия"
+
+        # Dynamically auto-correct tz_name if Europe/Moscow was left on a foreign city
+        if tz_name == "Europe/Moscow" and TimezoneService.is_foreign_city(clean_city):
+            resolved_tz = TimezoneService.resolve_timezone_for_city(clean_city, clean_country)
+            if resolved_tz and resolved_tz != "Europe/Moscow":
+                tz_name = resolved_tz
 
         if account:
             acc_name = account.first_name or "Без имени"

@@ -385,6 +385,29 @@ class CountryKnowledgeCatalog:
         "нью-йорк": ("USA", "US"),
         "нью йорк": ("USA", "US"),
         "new york": ("USA", "US"),
+        "портленд": ("USA", "US"),
+        "portland": ("USA", "US"),
+        "шарлотт": ("USA", "US"),
+        "шарлотта": ("USA", "US"),
+        "charlotte": ("USA", "US"),
+        "сиэтл": ("USA", "US"),
+        "seattle": ("USA", "US"),
+        "остин": ("USA", "US"),
+        "austin": ("USA", "US"),
+        "хьюстон": ("USA", "US"),
+        "houston": ("USA", "US"),
+        "даллас": ("USA", "US"),
+        "dallas": ("USA", "US"),
+        "филадельфия": ("USA", "US"),
+        "philadelphia": ("USA", "US"),
+        "атланта": ("USA", "US"),
+        "atlanta": ("USA", "US"),
+        "денвер": ("USA", "US"),
+        "denver": ("USA", "US"),
+        "лас-вегас": ("USA", "US"),
+        "las vegas": ("USA", "US"),
+        "детройт": ("USA", "US"),
+        "detroit": ("USA", "US"),
         "минск": ("Беларусь", "BY"),
         "тбилиси": ("Georgia", "GE"),
         "ереван": ("Armenia", "AM"),
@@ -437,6 +460,11 @@ class CountryKnowledgeCatalog:
         if geo:
             c_name = "USA" if geo.country == "США" else geo.country
             return c_name, geo.country_code
+
+        # If city name has Latin characters and is not Russian, default to USA, US
+        if any(c.isascii() and c.isalpha() for c in city_clean) and not any('а' <= c <= 'я' or 'А' <= c <= 'Я' for c in city_clean):
+            if city_clean not in ("moscow", "saint petersburg", "spb", "kazan", "sochi", "samara", "novosibirsk"):
+                return "USA", "US"
 
         return "Россия", "RU"
 

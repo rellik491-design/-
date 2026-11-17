@@ -226,3 +226,90 @@ def test_11_format_legend_card_clean_separation():
 
     # Must have local sleep notice
     assert "• <b>Режим сна:</b> 🌙 23:00 – 08:30 <i>(по местному времени)</i>" in card
+
+
+def test_12_us_cities_portland_and_charlotte_resolution():
+    """12. Portland, USA and Charlotte, USA properly resolve country (США), state, and timezone without USA in district."""
+    # Test Portland, USA
+    res_portland = TimezoneService.parse_and_clean_location("Portland, USA")
+    assert res_portland["city"] == "Portland"
+    assert res_portland["district"] == ""
+    assert res_portland["country"] == "США"
+    assert res_portland["country_code"] == "US"
+    assert res_portland["region"] == "Орегон"
+    assert res_portland["timezone_name"] == "America/Los_Angeles"
+
+    # Test Charlotte, USA
+    res_charlotte = TimezoneService.parse_and_clean_location("Charlotte, USA")
+    assert res_charlotte["city"] == "Charlotte"
+    assert res_charlotte["district"] == ""
+    assert res_charlotte["country"] == "США"
+    assert res_charlotte["country_code"] == "US"
+    assert res_charlotte["region"] == "Северная Каролина"
+    assert res_charlotte["timezone_name"] == "America/New_York"
+
+    # Test Seattle, WA
+    res_seattle = TimezoneService.parse_and_clean_location("Seattle, WA")
+    assert res_seattle["city"] == "Seattle"
+    assert res_seattle["district"] == ""
+    assert res_seattle["country"] == "США"
+    assert res_seattle["region"] == "Вашингтон"
+    assert res_seattle["timezone_name"] == "America/Los_Angeles"
+
+
+def test_13_format_legend_card_portland_and_charlotte_no_russia():
+    """13. format_legend_card displays correct USA country, region, and local timezone for Portland and Charlotte."""
+    engine = TelegramBotEngine(token="mock_token", admin_id=123)
+
+    p_alisa = Persona(
+        name="Алиса",
+        age=23,
+        city="Portland",
+        district="",
+        country="США",
+        region="Орегон",
+        timezone_name="America/Los_Angeles",
+        sleep_start="01:00",
+        sleep_end="08:30",
+        birth_city="Киев",
+    )
+    card_alisa = engine.format_legend_card(p_alisa)
+    assert "• <b>Город и район:</b> Portland" in card_alisa
+    assert "Portland, USA" not in card_alisa
+    assert "центр / ЦАО" not in card_alisa
+    assert "• <b>Страна / регион:</b> США, Орегон" in card_alisa
+    assert "Россия" not in card_alisa
+    assert "• <b>Часовой пояс:</b> 🕐 <code>America/Los_Angeles</code>" in card_alisa
+
+    p_vlada = Persona(
+        name="Vlada",
+        age=23,
+        city="Charlotte",
+        district="",
+        country="США",
+        region="Северная Каролина",
+        timezone_name="America/New_York",
+        sleep_start="01:00",
+        sleep_end="08:30",
+        birth_city="Киев",
+    )
+    card_vlada = engine.format_legend_card(p_vlada)
+    assert "• <b>Город и район:</b> Charlotte" in card_vlada
+    assert "Charlotte, USA" not in card_vlada
+    assert "центр / ЦАО" not in card_vlada
+    assert "• <b>Страна / регион:</b> США, Северная Каролина" in card_vlada
+    assert "Россия" not in card_vlada
+    assert "• <b>Часовой пояс:</b> 🕐 <code>America/New_York</code>" in card_vlada
+
+
+def test_14_local_time_and_sleep_in_portland():
+    """14. Sleep status in Portland (America/Los_Angeles) at 01:00-08:30 schedule."""
+    pt_tz = pytz.timezone("America/Los_Angeles")
+
+    # 05:00 Portland time -> Asleep
+    dt_0500 = pt_tz.localize(datetime(2026, 11, 17, 5, 0, 0))
+    assert TimezoneService.is_persona_sleeping("America/Los_Angeles", "01:00", "08:30", dt_0500) is True
+
+    # 14:00 Portland time -> Awake
+    dt_1400 = pt_tz.localize(datetime(2026, 11, 17, 14, 0, 0))
+    assert TimezoneService.is_persona_sleeping("America/Los_Angeles", "01:00", "08:30", dt_1400) is False

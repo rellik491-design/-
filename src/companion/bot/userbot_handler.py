@@ -627,7 +627,8 @@ class UserbotHandler:
         photo_asset = None
         ai_photo_context = ""
         chat_key = str(contact.tg_id or contact.id)
-        current_hour = (now or datetime.now(timezone.utc)).hour
+        eff_tz = getattr(persona, "timezone_name", "Europe/Moscow") or "Europe/Moscow"
+        current_hour = TimezoneService.get_local_datetime(eff_tz, now).hour
 
         eff_persona_id = persona.id if persona else None
         if photo_intent.requested:

@@ -34,6 +34,8 @@ async def init_db():
                 "years_in_city": "VARCHAR(64) DEFAULT 'Живу тут около 4 лет'",
                 "country": "VARCHAR(64) DEFAULT 'Россия'",
                 "country_code": "VARCHAR(8) DEFAULT 'RU'",
+                "region": "VARCHAR(100) NULL",
+                "timezone_source": "VARCHAR(20) DEFAULT 'AUTO'",
                 "sleep_time": "VARCHAR(5) DEFAULT '23:00'",
                 "wake_time": "VARCHAR(5) DEFAULT '09:00'",
                 "work_start": "VARCHAR(5) DEFAULT '10:00'",

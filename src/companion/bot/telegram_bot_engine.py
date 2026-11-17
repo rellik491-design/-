@@ -1006,6 +1006,21 @@ class TelegramBotEngine:
         style_val = getattr(persona, "current_style", None) or "adaptive_all"
         style_title = StyleType(style_val).title
 
+        from companion.services.timezone_service import TimezoneService
+
+        clean_city = TimezoneService.clean_geographic_string(city)
+        clean_dist = TimezoneService.clean_geographic_string(district) if district else ""
+        city_dist_str = f"{clean_city}, {clean_dist}" if clean_dist else clean_city
+
+        country = getattr(persona, "country", "") or "Россия"
+        region = getattr(persona, "region", "") or ""
+        clean_country = TimezoneService.clean_geographic_string(country)
+        clean_region = TimezoneService.clean_geographic_string(region) if region else ""
+        if clean_region and clean_country and clean_region.lower() != clean_country.lower():
+            country_region_str = f"{clean_country}, {clean_region}"
+        else:
+            country_region_str = clean_country or clean_region or "Россия"
+
         if account:
             acc_name = account.first_name or "Без имени"
             acc_user = f"@{account.username}" if account.username else f"ID: {account.tg_user_id or account.id}"
@@ -1025,14 +1040,16 @@ class TelegramBotEngine:
             f"Эти данные нейросеть использует в каждом сообщении, чтобы общаться "
             f"строго по вашей индивидуальной легенде:\n\n"
             f"• <b>Имя и возраст:</b> {name}, {age} лет\n"
-            f"• <b>Город и район:</b> {city}, {district} (<code>{tz_name}</code>)\n"
+            f"• <b>Город и район:</b> {city_dist_str}\n"
+            f"• <b>Страна / регион:</b> {country_region_str}\n"
+            f"• <b>Часовой пояс:</b> 🕐 <code>{tz_name}</code>\n"
             f"• <b>Откуда родом:</b> {birth_city}\n"
             f"• <b>Почему переехала:</b> <i>{move_reason}</i>\n"
             f"• <b>Сколько уже тут:</b> <i>{years_in_city}</i>\n"
             f"• <b>Контекст дейтинга:</b> <i>{dating_app}</i>\n"
             f"• <b>Учеба / Работа и хобби:</b> <i>{study_hobbies}</i>\n"
             f"• <b>Детали и предпочтения:</b> <i>{extra}</i>\n"
-            f"• <b>Режим сна:</b> 🌙 {sleep_start} – {sleep_end}\n"
+            f"• <b>Режим сна:</b> 🌙 {sleep_start} – {sleep_end} <i>(по местному времени)</i>\n"
             f"• <b>Стиль общения:</b> {style_title}\n"
             f"{photo_line}\n"
             f"<i>Вы можете отредактировать любой пункт отдельно или нажать кнопку ниже, чтобы нейросеть заполнила всю анкету из одного вашего сообщения!</i>"
@@ -2248,18 +2265,25 @@ class TelegramBotEngine:
                     elif state == "WAIT_CITY_DISTRICT":
                         from companion.services.timezone_service import TimezoneService
 
-                        parts = [p.strip() for p in text.split(",", 1)]
-                        persona.city = parts[0]
-                        if len(parts) > 1:
-                            persona.district = parts[1]
-                        if persona.city:
-                            persona.timezone_name = TimezoneService.resolve_timezone_for_city(persona.city)
+                        geo_data = TimezoneService.parse_and_clean_location(text)
+                        persona.city = geo_data["city"]
+                        persona.district = geo_data["district"]
+                        if geo_data.get("country"):
+                            persona.country = geo_data["country"]
+                            persona.country_code = geo_data.get("country_code", getattr(persona, "country_code", "RU"))
+                        if geo_data.get("region"):
+                            persona.region = geo_data["region"]
+
+                        if getattr(persona, "timezone_source", "AUTO") == "AUTO" and geo_data.get("timezone_name"):
+                            persona.timezone_name = geo_data["timezone_name"]
+
                         mgr_state.last_edited_field = "city"
                         await session.commit()
                         await self.send_message(
                             chat_id,
                             f"✅ <b>Город и район сохранены:</b> {persona.city}"
                             + (f", {persona.district}" if persona.district else "")
+                            + f" (Часовой пояс: <code>{persona.timezone_name}</code>)"
                             + "!\n\n"
                             + self.format_legend_card(persona, account=target_account),
                             reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
@@ -2354,7 +2378,7 @@ class TelegramBotEngine:
                             await session.commit()
                             await self.send_message(
                                 chat_id,
-                                f"✅ <b>Режим сна сохранен:</b> 🌙 {persona.sleep_start} – {persona.sleep_end}!\n\n"
+                                f"✅ <b>Режим сна сохранен:</b> 🌙 {persona.sleep_start} – {persona.sleep_end} (по местному времени {persona.city})!\n\n"
                                 + self.format_legend_card(persona, account=target_account),
                                 reply_markup=self.build_legend_keyboard(account_id=acc_id_for_kb, has_multiple_accounts=has_mult),
                                 parse_mode="HTML",
@@ -2377,8 +2401,20 @@ class TelegramBotEngine:
                         parsed = await AIService.parse_legend_wizard(text)
                         persona.name = parsed.get("name") or persona.name
                         persona.age = parsed.get("age") or persona.age
-                        persona.city = parsed.get("city") or persona.city
-                        persona.district = parsed.get("district") or persona.district
+
+                        raw_c = parsed.get("city") or persona.city
+                        raw_d = parsed.get("district") or persona.district
+                        geo_data = TimezoneService.parse_and_clean_location(f"{raw_c}, {raw_d}")
+                        persona.city = geo_data["city"]
+                        persona.district = geo_data["district"]
+                        if geo_data.get("country"):
+                            persona.country = geo_data["country"]
+                            persona.country_code = geo_data.get("country_code", "RU")
+                        if geo_data.get("region"):
+                            persona.region = geo_data["region"]
+                        if getattr(persona, "timezone_source", "AUTO") == "AUTO" and geo_data.get("timezone_name"):
+                            persona.timezone_name = geo_data["timezone_name"]
+
                         persona.birth_city = parsed.get("birth_city") or getattr(persona, "birth_city", None)
                         persona.move_reason = parsed.get("move_reason") or getattr(persona, "move_reason", None)
                         persona.years_in_city = parsed.get("years_in_city") or getattr(persona, "years_in_city", None)
@@ -2387,8 +2423,6 @@ class TelegramBotEngine:
                         persona.extra_facts = parsed.get("extra_facts") or persona.extra_facts
                         if parsed.get("legend"):
                             persona.legend = parsed["legend"]
-                        if persona.city:
-                            persona.timezone_name = TimezoneService.resolve_timezone_for_city(persona.city)
                         mgr_state.last_edited_field = "name_age"
                         await session.commit()
 

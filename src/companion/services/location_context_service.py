@@ -372,7 +372,18 @@ class CountryKnowledgeCatalog:
         "berlin": ("Germany", "DE"),
         "дубай": ("UAE", "AE"),
         "dubai": ("UAE", "AE"),
+        "лос-анджелес": ("USA", "US"),
+        "лос анджелес": ("USA", "US"),
+        "los angeles": ("USA", "US"),
+        "la": ("USA", "US"),
+        "сан-франциско": ("USA", "US"),
+        "san francisco": ("USA", "US"),
+        "майами": ("USA", "US"),
+        "miami": ("USA", "US"),
+        "чикаго": ("USA", "US"),
+        "chicago": ("USA", "US"),
         "нью-йорк": ("USA", "US"),
+        "нью йорк": ("USA", "US"),
         "new york": ("USA", "US"),
         "минск": ("Беларусь", "BY"),
         "тбилиси": ("Georgia", "GE"),
@@ -421,6 +432,11 @@ class CountryKnowledgeCatalog:
         city_clean = (city or "").strip().lower()
         if city_clean in cls.CITY_TO_COUNTRY:
             return cls.CITY_TO_COUNTRY[city_clean]
+
+        geo = TimezoneService.get_geo_info(city)
+        if geo:
+            c_name = "USA" if geo.country == "США" else geo.country
+            return c_name, geo.country_code
 
         return "Россия", "RU"
 

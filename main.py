@@ -36,6 +36,10 @@ async def run_simulation_demo():
     print("=" * 60)
 
     await init_db()
+
+    # Automatically migrate and clean any corrupted persona geography/timezone records
+    async with async_session_maker() as session:
+        await TimezoneService.migrate_corrupted_personas(session)
     print("✅ База данных успешно инициализирована.")
 
     async with async_session_maker() as session:
@@ -193,6 +197,10 @@ async def run_live_bot(api_only: bool = False, bot_only: bool = False):
     print("=" * 60)
 
     await init_db()
+
+    # Automatically migrate and clean any corrupted persona geography/timezone records
+    async with async_session_maker() as session:
+        await TimezoneService.migrate_corrupted_personas(session)
 
     # Ensure Admin user & persona are present in database
     if settings.ADMIN_TELEGRAM_ID:

@@ -587,10 +587,11 @@ class UserbotHandler:
             contact=contact,
         )
 
-        # Anti-Instagram & Personal Contact Deflection Tracking
+        # Anti-Instagram & Personal Contact Deflection Tracking (Telegram-Only Policy)
         contact_deflection = IntentService.detect_contact_request(
             all_unread_text,
             contact_deflection_count=contact.contact_deflection_count or 0,
+            recent_chat_history=history,
         )
         if contact_deflection.deflection_required:
             contact.contact_deflection_count = (contact.contact_deflection_count or 0) + 1

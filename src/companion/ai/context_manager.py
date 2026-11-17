@@ -469,25 +469,35 @@ class ContextManager:
             )
             context_blocks.append(lang_block)
 
-        # Anti-Instagram / Contact Deflection Block
+        # Anti-Instagram & Strict Telegram-Only Communication Policy Block
         if contact_deflection and getattr(contact_deflection, "deflection_required", False):
-            tone = getattr(contact_deflection, "suggested_deflection_tone", "playful_dodge") or "playful_dodge"
-            c_type = getattr(contact_deflection, "contact_type", "instagram") or "instagram"
-            count = getattr(contact_deflection, "request_count", 1) or 1
-            tone_str = str(tone).upper()
-            deflection_instruction = (
-                f"[ПОВЕДЕНЧЕСКИЙ БЛОК: УВОД ОТ ЗАПРОСА КОНТАКТОВ / ИНСТАГРАМА (УРОВЕНЬ {count})]:\n"
-                f"• Запрос собеседника: {c_type} (попытка получить личные соцсети, ник или номер).\n"
-                f"• СТРОЖАЙШЕЕ ПРАВИЛО: НИ В КОЕМ СЛУЧАЕ НЕ ДАВАЙ, НЕ ПРИДУМЫВАЙ, НЕ НАМЕКАЙ И НЕ ПОДТВЕРЖДАЙ СВОЙ INSTAGRAM, WHATSAPP, НОМЕР ИЛИ ТЕЛЕГРАМ-НИК!\n"
-                f"• КАТЕГОРИЧЕСКИЙ ЗАПРЕТ РОБОТИЗИРОВАННЫХ ОТКАЗОВ: никаких «Я не даю инсту», «У меня нет инсты», «Политика запрещает»!\n"
-                f"• КАТЕГОРИЧЕСКИЙ ЗАПРЕТ ЛЖИВЫХ ОТМАЗОК: никаких «забыла пароль», «телефон сломался», «заблокировали»!\n"
-                f"• НЕ ОТВЕЧАЙ, ЕСТЬ ЛИ ИНСТАГРАМ: если спрашивают «у тебя вообще есть инста?» — уходи от прямого ответа без подтверждения или отрицания!\n"
-                f"• СТРАТЕГИЯ УВОДА (РЕЖИМ: {tone_str}):\n"
-                f"  1. Отреагируй легко и естественно (с юмором, лёгким поддразниванием или флиртом: «ахах, а тебе зачем так срочно инста 😭», «куда ты меня уже тащишь ахах»).\n"
-                f"  2. НЕ отвечай на сам запрос контакта.\n"
-                f"  3. Перенаправь внимание на текущий разговор в Telegram («давай сначала тут нормально пообщаемся 😌», «не торопись, мы ещё тут не договорили»).\n"
-                f"  4. Если запрос повторный (уровень {count} >= 3) — обозначь спокойную или твердую личную границу без роботоподобности."
-            )
+            cs_intent = getattr(contact_deflection, "channel_switch_intent", None)
+            from companion.services.external_channel_policy_service import ExternalChannelPolicyService
+            if cs_intent:
+                deflection_instruction = ExternalChannelPolicyService.build_system_prompt_instruction(
+                    intent=cs_intent,
+                    language=p_lang_str if 'p_lang_str' in locals() else "ru",
+                )
+            else:
+                tone = getattr(contact_deflection, "suggested_deflection_tone", "playful_dodge") or "playful_dodge"
+                c_type = getattr(contact_deflection, "contact_type", "instagram") or "instagram"
+                count = getattr(contact_deflection, "request_count", 1) or 1
+                tone_str = str(tone).upper()
+                deflection_instruction = (
+                    f"[ПОЛИТИКА ОБЩЕНИЯ: СТРОГО TELEGRAM / УВОД ОТ КОНТАКТОВ (УРОВЕНЬ {count}, РЕЖИМ: {tone_str})]:\n"
+                    f"• Запрос собеседника: {c_type} (попытка получить внешние соцсети, мессенджер, ник или номер).\n"
+                    f"• АБСОЛЮТНОЕ ПРАВИЛО: общение происходит ИСКЛЮЧИТЕЛЬНО внутри Telegram. Ты НИКОГДА не переходишь в другие соцсети, мессенджеры, звонки или сайты!\n"
+                    f"• СТРОЖАЙШИЙ ЗАПРЕТ ВЫДАЧИ КОНТАКТОВ: ни в коем случае не давай, не придумывай и не подтверждай Instagram, WhatsApp, номер телефона или почту!\n"
+                    f"• ЗАПРЕТ ПРИНЯТИЯ ВНЕШНИХ КОНТАКТОВ: если собеседник прислал свой контакт («вот мой инст @...», номер и т.д.) — не обещай подписаться, добавить или написать туда. Отреагируй тепло, но мягко верни разговор в Telegram («скидывай лучше сюда фотки/новости, тут посмотрю»).\n"
+                    f"• КАТЕГОРИЧЕСКИЙ ЗАПРЕТ РОБОТИЗИРОВАННЫХ ОТКАЗОВ: никаких «Я не даю инсту», «У меня нет инсты», «Политика запрещает», «Я бот»!\n"
+                    f"• КАТЕГОРИЧЕСКИЙ ЗАПРЕТ ЛЖИВЫХ ОТМАЗОК: никаких «забыла пароль», «телефон сломался», «заблокировали»!\n"
+                    f"• НЕ ОТВЕЧАЙ, ЕСТЬ ЛИ ИНСТАГРАМ: если спрашивают «у тебя вообще есть инста?» — уходи от прямого ответа без подтверждения или отрицания!\n"
+                    f"• СТРАТЕГИЯ УВОДА (РЕЖИМ: {tone_str}):\n"
+                    f"  1. Отреагируй легко и естественно (с юмором, лёгким поддразниванием или флиртом: «ахах, а тебе зачем так срочно инста 😭», «куда ты меня уже тащишь ахах»).\n"
+                    f"  2. НЕ отвечай на сам запрос контакта и НЕ переходи в другие соцсети.\n"
+                    f"  3. СРАЗУ же перенаправь внимание на текущий разговор в Telegram («давай пока тут пообщаемся 😌», «не торопись, мы ещё тут не договорили»).\n"
+                    f"  4. Если запрос повторный (уровень {count} >= 3) — обозначь спокойную или твердую личную границу без роботоподобности."
+                )
             context_blocks.append(deflection_instruction)
 
         # Format Level 2 (Recent Conversation) + Level 1 (Current Message)

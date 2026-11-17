@@ -31,13 +31,14 @@ class VoiceIntent:
 @dataclass
 class ContactDeflectionIntent:
     contact_request: bool
-    contact_type: str = "none"  # "instagram", "phone", "whatsapp", "telegram_username", "other_social"
+    contact_type: str = "none"  # "instagram", "phone", "whatsapp", "telegram_username", "other_social", "other"
     request_intensity: str = "soft"  # "soft", "normal", "persistent", "pressuring"
     deflection_required: bool = False
     request_count: int = 1
     trigger: Optional[str] = None
     suggested_deflection_tone: str = "playful_dodge"  # "playful_dodge", "stronger_dodge", "calm_boundary", "firm_boundary"
     reason: str = ""
+    channel_switch_intent: Optional[Any] = None
 
 
 class IntentService:
@@ -304,13 +305,17 @@ class IntentService:
 
     @classmethod
     def detect_contact_request(
-        cls, text: str, contact_deflection_count: int = 0
+        cls,
+        text: str,
+        contact_deflection_count: int = 0,
+        recent_chat_history: Optional[List[Dict[str, str]]] = None,
     ) -> ContactDeflectionIntent:
         """
         Classifies incoming messages for personal contact requests (Instagram, WhatsApp,
-        usernames, phone numbers). Enforces multi-level deflection progression.
+        usernames, phone numbers, external messengers, calls, links).
+        Enforces Telegram-Only policy and multi-level deflection progression.
         """
-        cleaned = text.lower()
+        cleaned = (text or "").lower()
 
         matched_type = None
         matched_trigger = None
@@ -333,8 +338,40 @@ class IntentService:
                     confidence = conf
                     break
 
+        # Also delegate to ExternalChannelPolicyService for comprehensive multi-platform coverage
+        from companion.services.external_channel_policy_service import (
+            ExternalChannelPolicyService,
+            ChannelSwitchIntent,
+        )
+
+        cs_intent = ExternalChannelPolicyService.classify_intent(
+            text=text,
+            deflection_count=contact_deflection_count,
+            recent_chat_history=recent_chat_history,
+        )
+
         if not matched_type:
-            return ContactDeflectionIntent(contact_request=False, deflection_required=False)
+            if cs_intent.channel_switch and cs_intent.deflection_required:
+                # Map platform / channel_type to contact_type
+                if cs_intent.platform == "instagram":
+                    matched_type = "instagram"
+                elif cs_intent.platform in ("whatsapp", "wa"):
+                    matched_type = "whatsapp"
+                elif cs_intent.platform == "phone":
+                    matched_type = "phone"
+                elif cs_intent.intent in ("request_username", "obfuscated_username"):
+                    matched_type = "telegram_username"
+                else:
+                    matched_type = cs_intent.platform or cs_intent.channel_type or "other_social"
+                matched_trigger = cs_intent.trigger or text[:30]
+                confidence = cs_intent.confidence
+
+        if not matched_type:
+            return ContactDeflectionIntent(
+                contact_request=False,
+                deflection_required=False,
+                channel_switch_intent=cs_intent,
+            )
 
         req_count = contact_deflection_count + 1
 
@@ -360,6 +397,7 @@ class IntentService:
             trigger=matched_trigger,
             suggested_deflection_tone=tone,
             reason=f"Detected {matched_type} request: '{matched_trigger}' (count={req_count})",
+            channel_switch_intent=cs_intent,
         )
 
 

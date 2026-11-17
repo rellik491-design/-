@@ -63,6 +63,32 @@ class PreSendValidator:
             resolution = mp_ctx.get("resolution")
             text = MeetingPlannerService.heal_accidental_yes(text, resolution)
 
+        # Check External Channel Policy & Personal Contact Firewall (Master Task & Section 66)
+        from companion.services.external_channel_policy_service import ExternalChannelPolicyService
+        from companion.config import settings
+        bot_uname = getattr(settings, "BOT_USERNAME", None)
+        is_channel_valid, channel_err = ExternalChannelPolicyService.validate_outgoing(
+            text=text,
+            allowed_bot_username=bot_uname,
+        )
+        if not is_channel_valid:
+            logger.warning("[PRESEND_VALIDATOR] FAILED External Channel Firewall (%s): '%s'", channel_err, text)
+            lang = internal_context.get("language", {}).get("current", "ru")
+            healed = ExternalChannelPolicyService.sanitize_and_heal(
+                raw_text=text,
+                language=lang,
+                allowed_bot_username=bot_uname,
+            )
+            is_healed_valid, _ = ExternalChannelPolicyService.validate_outgoing(
+                text=healed,
+                allowed_bot_username=bot_uname,
+            )
+            if is_healed_valid and healed:
+                logger.info("[PRESEND_VALIDATOR] Successfully healed external channel violation -> '%s'", healed)
+                text = healed
+            else:
+                return False, f"external_channel_violation:{channel_err}", ""
+
         # Check 1 & 2: Target author must be USER
         if (target_sender_type or "").upper() in ("BOT", "ASSISTANT", "SELF"):
             logger.error("[PRESEND_VALIDATOR] FAILED Check 1-2: Target author is BOT/ASSISTANT (%s)", target_sender_type)

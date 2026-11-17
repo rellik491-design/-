@@ -85,32 +85,42 @@ class TelegramBotEngine:
         admin_ids = {self.admin_id, getattr(settings, "ADMIN_TELEGRAM_ID", 0), 8541203642, 8501711204} - {0, None}
         return user_tg_id in admin_ids
 
+    async def _safe_setup_and_greeting(self):
+        """Asynchronously registers commands and sends admin startup greeting without blocking polling."""
+        try:
+            await self.setup_bot_commands()
+        except Exception as e:
+            logger.warning("[STARTUP] Setup bot commands failed or timed out: %s", e)
+
+        try:
+            async with async_session_maker() as session:
+                admin_user = await self.get_or_create_user(session, {"id": self.admin_id, "username": "admin"})
+                sub = await SubscriptionService.get_active_subscription(session, admin_user.id)
+                sub_info = SubscriptionService.get_detailed_status(sub)
+
+            await self.send_message(
+                chat_id=self.admin_id,
+                text=self.format_main_menu_text(is_admin=True, sub_info=sub_info),
+                reply_markup=self.build_main_menu_keyboard(is_admin=True),
+                parse_mode="HTML",
+            )
+            logger.info("[STARTUP] Admin startup greeting delivered to %d", self.admin_id)
+        except Exception as e:
+            logger.warning("[STARTUP] Admin greeting delivery postponed: %s", e)
+
     async def start(self):
         self._running = True
-        self.client = httpx.AsyncClient(timeout=25.0)
-        self.poll_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=45.0, write=15.0, pool=45.0))
+        self.client = httpx.AsyncClient(timeout=httpx.Timeout(connect=6.0, read=12.0, write=6.0, pool=12.0))
+        self.poll_client = httpx.AsyncClient(timeout=httpx.Timeout(connect=6.0, read=12.0, write=6.0, pool=12.0))
         logger.info("Telegram Bot Engine started for admin ID: %d", self.admin_id)
 
-        # Register slash commands in Telegram API so typing '/' brings up the suggestions list
-        await self.setup_bot_commands()
-
-        # Notify admin of startup
-        async with async_session_maker() as session:
-            admin_user = await self.get_or_create_user(session, {"id": self.admin_id, "username": "admin"})
-            sub = await SubscriptionService.get_active_subscription(session, admin_user.id)
-            sub_info = SubscriptionService.get_detailed_status(sub)
-
-        await self.send_message(
-            chat_id=self.admin_id,
-            text=self.format_main_menu_text(is_admin=True, sub_info=sub_info),
-            reply_markup=self.build_main_menu_keyboard(is_admin=True),
-            parse_mode="HTML",
-        )
+        # Launch command registration and admin greeting in background so update polling starts AT ONCE
+        asyncio.create_task(self._safe_setup_and_greeting())
 
         poll_counter = 0
         while self._running:
             try:
-                updates = await self.get_updates(offset=self.offset, timeout=20)
+                updates = await self.get_updates(offset=self.offset, timeout=5)
                 if not self._running:
                     break
                 for update in updates:
@@ -295,7 +305,7 @@ class TelegramBotEngine:
             logger.warning("Exception in setup_bot_commands: %s", e)
             return False
 
-    async def get_updates(self, offset: int = 0, timeout: int = 10) -> List[Dict[str, Any]]:
+    async def get_updates(self, offset: int = 0, timeout: int = 5) -> List[Dict[str, Any]]:
         url = f"{self.base_url}/getUpdates"
         payload = {
             "offset": offset,
@@ -314,19 +324,22 @@ class TelegramBotEngine:
             client = self.poll_client or self.client
             if not client:
                 return []
-            res = await client.post(url, json=payload)
+            res = await asyncio.wait_for(client.post(url, json=payload), timeout=timeout + 7.0)
             if res.status_code == 200:
                 data = res.json()
-                return data.get("result", []) if data.get("ok") else []
+                results = data.get("result", []) if data.get("ok") else []
+                if results:
+                    logger.info("[POLL] Received %d updates from Telegram (highest update_id: %s)", len(results), results[-1].get("update_id"))
+                return results
             elif res.status_code in (502, 503, 504):
-                logger.warning("[TELEGRAM_API] Server returned %d (%s). Backing off 3s...", res.status_code, res.text[:80])
-                await asyncio.sleep(3.0)
+                logger.warning("[TELEGRAM_API] Server returned %d (%s). Backing off 2.5s...", res.status_code, res.text[:80])
+                await asyncio.sleep(2.5)
                 return []
             else:
                 logger.warning("[TELEGRAM_API] getUpdates returned status %d: %s", res.status_code, res.text[:120])
                 await asyncio.sleep(1.5)
                 return []
-        except (httpx.ReadTimeout, httpx.TimeoutException):
+        except (httpx.ReadTimeout, httpx.TimeoutException, asyncio.TimeoutError):
             return []
         except Exception as e:
             if self._running:
@@ -1960,6 +1973,16 @@ class TelegramBotEngine:
         chat_id = message.get("chat", {}).get("id")
         is_admin = self.is_admin_user(user_id)
 
+        clean_cmd = text
+        if text.startswith("/"):
+            cmd_parts = text.split(maxsplit=1)
+            base_cmd = cmd_parts[0].split("@")[0].lower()
+            rest = (" " + cmd_parts[1]) if len(cmd_parts) > 1 else ""
+            clean_cmd = base_cmd + rest
+            logger.info("[BOT_CMD] Incoming command '%s' (normalized: '%s') from user_id=%s in chat_id=%s", text, clean_cmd, user_id, chat_id)
+        elif text:
+            logger.info("[BOT_MSG] Incoming text message from user_id=%s in chat_id=%s: '%s'", user_id, chat_id, text[:60])
+
         # 0. Intercept incoming voice note, audio or video note message (Speech-to-Text)
         if "voice" in message or "audio" in message or "video_note" in message:
             voice_obj = message.get("voice") or message.get("audio") or message.get("video_note")
@@ -2785,6 +2808,8 @@ class TelegramBotEngine:
                 return
 
             # 4. Slash Commands Dispatcher
+            if clean_cmd.startswith("/"):
+                text = clean_cmd
             if text in ("/resume", "/unpause"):
                 from companion.services.health_manager import HealthManager
                 HealthManager.manual_resume(admin_name=f"User_{db_user.id}")
@@ -2808,7 +2833,7 @@ class TelegramBotEngine:
                 )
                 return
 
-            if text in ("/start", "/menu"):
+            if text in ("/start", "/menu") or clean_cmd in ("/start", "/menu"):
                 sub = await SubscriptionService.get_active_subscription(session, db_user.id)
                 sub_info = SubscriptionService.get_detailed_status(sub)
                 text_reply = self.format_main_menu_text(is_admin, sub_info)

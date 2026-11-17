@@ -263,6 +263,7 @@ class TelegramBotEngine:
                     "commands": user_commands,
                     "scope": {"type": "default"},
                 },
+                timeout=5.0,
             )
             if res_user.status_code != 200:
                 logger.warning("Telegram setMyCommands (default) failed: %s %s", res_user.status_code, res_user.text)
@@ -275,6 +276,7 @@ class TelegramBotEngine:
                         "commands": admin_commands,
                         "scope": {"type": "chat", "chat_id": self.admin_id},
                     },
+                    timeout=5.0,
                 )
                 if res_adm.status_code != 200:
                     logger.warning("Telegram setMyCommands (admin) failed: %s %s", res_adm.status_code, res_adm.text)
@@ -285,6 +287,7 @@ class TelegramBotEngine:
             await self.client.post(
                 f"{self.base_url}/setChatMenuButton",
                 json=menu_btn_payload,
+                timeout=5.0,
             )
             logger.info("Bot commands and Menu Button successfully registered in Telegram API.")
             return True
@@ -292,7 +295,7 @@ class TelegramBotEngine:
             logger.warning("Exception in setup_bot_commands: %s", e)
             return False
 
-    async def get_updates(self, offset: int = 0, timeout: int = 20) -> List[Dict[str, Any]]:
+    async def get_updates(self, offset: int = 0, timeout: int = 10) -> List[Dict[str, Any]]:
         url = f"{self.base_url}/getUpdates"
         payload = {
             "offset": offset,
@@ -312,13 +315,23 @@ class TelegramBotEngine:
             if not client:
                 return []
             res = await client.post(url, json=payload)
-            data = res.json()
-            return data.get("result", []) if data.get("ok") else []
+            if res.status_code == 200:
+                data = res.json()
+                return data.get("result", []) if data.get("ok") else []
+            elif res.status_code in (502, 503, 504):
+                logger.warning("[TELEGRAM_API] Server returned %d (%s). Backing off 3s...", res.status_code, res.text[:80])
+                await asyncio.sleep(3.0)
+                return []
+            else:
+                logger.warning("[TELEGRAM_API] getUpdates returned status %d: %s", res.status_code, res.text[:120])
+                await asyncio.sleep(1.5)
+                return []
         except (httpx.ReadTimeout, httpx.TimeoutException):
             return []
         except Exception as e:
             if self._running:
                 logger.error("Error in get_updates: %s (%s)", type(e).__name__, e)
+                await asyncio.sleep(2.0)
             return []
 
     async def send_message(
@@ -347,29 +360,15 @@ class TelegramBotEngine:
                 payload["reply_parameters"] = reply_params
                 payload["reply_to_message_id"] = int(reply_to_message_id)
                 payload["allow_sending_without_reply"] = True
-        try:
-            if not self.client:
-                return False
-            res = await self.client.post(url, json=payload)
-            if res.status_code == 200:
-                try:
-                    resp_json = res.json()
-                    sent_id = resp_json.get("result", {}).get("message_id")
-                    if sent_id:
-                        from companion.services.message_ownership_service import MessageOwnershipService
-                        MessageOwnershipService.register_outgoing_message_memory(chat_id, sent_id)
-                except Exception:
-                    pass
-                return True
-            if res.status_code == 400 and "reply_parameters" in payload:
-                logger.warning("Telegram rejected reply_parameters for direct chat %s (%s). Retrying without reply target.", chat_id, res.text)
-                payload.pop("reply_parameters", None)
-                payload.pop("reply_to_message_id", None)
-                payload.pop("allow_sending_without_reply", None)
-                retry_res = await self.client.post(url, json=payload)
-                if retry_res.status_code == 200:
+
+        for attempt in range(3):
+            try:
+                if not self.client:
+                    return False
+                res = await self.client.post(url, json=payload)
+                if res.status_code == 200:
                     try:
-                        resp_json = retry_res.json()
+                        resp_json = res.json()
                         sent_id = resp_json.get("result", {}).get("message_id")
                         if sent_id:
                             from companion.services.message_ownership_service import MessageOwnershipService
@@ -377,13 +376,29 @@ class TelegramBotEngine:
                     except Exception:
                         pass
                     return True
-                return False
-            if res.status_code != 200:
+                if res.status_code == 400 and "reply_parameters" in payload:
+                    logger.warning("Telegram rejected reply_parameters for direct chat %s (%s). Retrying without reply target.", chat_id, res.text)
+                    payload.pop("reply_parameters", None)
+                    payload.pop("reply_to_message_id", None)
+                    payload.pop("allow_sending_without_reply", None)
+                    continue
+                if res.status_code in (502, 503, 504) and attempt < 2:
+                    logger.warning("Telegram returned %d on sendMessage (attempt %d). Retrying in 2s...", res.status_code, attempt + 1)
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                    continue
                 logger.error("Failed to send message: %s - %s", res.status_code, res.text)
-            return res.status_code == 200
-        except Exception as e:
-            logger.error("Exception in send_message: %s (%s)", type(e).__name__, e)
-            return False
+                return False
+            except (httpx.TimeoutException, httpx.NetworkError) as net_err:
+                if attempt < 2:
+                    logger.warning("Network/Timeout error sending message to %s (attempt %d): %s. Retrying...", chat_id, attempt + 1, net_err)
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                    continue
+                logger.error("Failed to send message to %s after retries: %s", chat_id, net_err)
+                return False
+            except Exception as e:
+                logger.error("Unexpected error in send_message: %s", e)
+                return False
+        return False
 
     async def send_photo(
         self,

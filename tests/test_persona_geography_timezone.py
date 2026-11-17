@@ -369,11 +369,13 @@ def test_16_format_city_detailed_report():
     assert "Пасмурно" in report
     assert "12.0 км/ч" in report
     assert "85%" in report
+    assert "• Разница с Киевом: <b>-10 ч. от Киева (в Киеве 15:00)</b>" in report
 
     # Test awake state at 14:00 Portland time (UTC 22:00)
     ref_utc_awake = datetime(2026, 1, 15, 22, 0, 0, tzinfo=timezone.utc)
     report_awake = TimezoneService.format_city_detailed_report(p, weather_sample, ref_utc_dt=ref_utc_awake)
     assert "• Точное время: <b>14:00</b>" in report_awake
+    assert "• Разница с Киевом: <b>-10 ч. от Киева (в Киеве 00:00)</b>" in report_awake
     assert "☀️ <b>Бодрствует</b>" in report_awake
     assert "до отбоя ~11 ч. 00 мин." in report_awake
 

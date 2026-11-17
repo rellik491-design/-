@@ -1434,17 +1434,17 @@ class TimezoneService:
         is_dst = bool(local_dt.dst())
         dst_label = "летнее время" if is_dst else "стандартное время"
 
-        msk_dt = cls.get_local_datetime("Europe/Moscow", ref_utc_dt)
+        kyiv_dt = cls.get_local_datetime("Europe/Kyiv", ref_utc_dt)
         off_persona = local_dt.utcoffset().total_seconds() if local_dt.utcoffset() else 0
-        off_msk = msk_dt.utcoffset().total_seconds() if msk_dt.utcoffset() else 0
-        diff_hours = int((off_persona - off_msk) // 3600)
-        msk_now_str = msk_dt.strftime("%H:%M")
+        off_kyiv = kyiv_dt.utcoffset().total_seconds() if kyiv_dt.utcoffset() else 0
+        diff_hours = int((off_persona - off_kyiv) // 3600)
+        kyiv_now_str = kyiv_dt.strftime("%H:%M")
         if diff_hours == 0:
-            diff_str = f"совпадает с МСК (в Москве {msk_now_str})"
+            diff_str = f"совпадает с Киевом (в Киеве {kyiv_now_str})"
         elif diff_hours > 0:
-            diff_str = f"+{diff_hours} ч. от МСК (в Москве {msk_now_str})"
+            diff_str = f"+{diff_hours} ч. от Киева (в Киеве {kyiv_now_str})"
         else:
-            diff_str = f"{diff_hours} ч. от МСК (в Москве {msk_now_str})"
+            diff_str = f"{diff_hours} ч. от Киева (в Киеве {kyiv_now_str})"
 
         sleep_start = getattr(persona, "sleep_start", "23:00") or "23:00"
         sleep_end = getattr(persona, "sleep_end", "08:30") or "08:30"
@@ -1501,7 +1501,7 @@ class TimezoneService:
             f"• Точное время: <b>{time_str}</b>\n"
             f"• Дата: <b>{full_date_str}</b>\n"
             f"• Период суток: <b>{period_ru}</b>\n"
-            f"• Разница с Москвой: <b>{diff_str}</b>\n\n"
+            f"• Разница с Киевом: <b>{diff_str}</b>\n\n"
             f"🌙 <b>РЕЖИМ СНА И АКТИВНОСТЬ:</b>\n"
             f"• Расписание сна: 🌙 <code>{sleep_start} – {sleep_end}</code>\n"
             f"• Статус модели: {state_badge}\n\n"
